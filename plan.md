@@ -137,3 +137,264 @@
   지도/로컬 서비스 활성화
 
   활성화 후 analyze.py 상단의 geocoding 함수를 Kakao Local로 교체하면 음식점 정확도가 크게 올라갑니다.
+
+
+
+  ======================================================================
+  2026 04 26
+
+  <!-- updated: 2026-04-26 | hash: 75f20015 | summary: TourAPI 벌크 수집 도입에 따른 프로젝트 고도화 기획 — 데이터 레이크화·임계값 재calibration·검증 엔진 강화 -->
+# 프로젝트 고도화 기획서 (Enhancement Plan)
+
+> 한국관광공사 국문 관광정보 서비스(TourAPI v2 / data.go.kr 15101578) 전국 약 26만 건 POI 메타를 **벌크 수집**해 CSV 데이터셋으로 보유하게 됨에 따라, 기존 *온디맨드 호출 + 단발성 분석* 구조에서 *데이터 레이크 기반 검증 엔진* 으로 전환하는 고도화 계획.
+
+---
+
+## 0. 한 줄 요약
+
+> **"외부 API 의존을 끊고, 측정 가능한 자체 데이터 자산을 갖춘 검증 엔진으로 진화한다."**
+
+API 호출 단위로 사고하던 구조를 데이터셋 단위로 바꾸면, ① 임계값을 통계로 재산출할 수 있고 ② 운영시간·카테고리 결측이 사라져 Hard Fail/PurposeFit 검증 정확도가 올라가며 ③ 합성 일정(synthetic schedule) 대량 생성으로 모델 평가가 가능해진다.
+
+---
+
+## 1. 현재 구조의 한계 진단
+
+| 영역 | 현재 한계 | 근거 |
+|---|---|---|
+| **임계값 신뢰성** | Travel Ratio 임계값이 101+89일 표본 기반 → 통계적으로 빈약 | `plan.md` "README 가정 0.38 vs 실측 0.142, 3배 과대" |
+| **운영시간 결측** | TourAPI 단발 호출이라 운영시간 데이터 누락 빈번 → Hard Fail 검출 불가 | `phase4-validation/step0.md`의 폴백 로직 — 운영시간 누락 시 검증 스킵 |
+| **카테고리 결측** | POI별 cat1/cat2/cat3 분류가 없어서 PurposeFit(코사인) 계산 불가 | `phase4-validation/step1.md`의 INTENT_VECTORS — 코드 매칭 대상 없음 |
+| **API 쿼터 의존** | Kakao Mobility 일일 쿼터 소진 시 분석 일부 누락 (10건/50건) | `analyze.py`의 `_quota_exhausted` 플래그 |
+| **합성 평가 부재** | "비효율 일정"을 인공 생성해 탐지율을 측정할 수단이 없음 | `phase4-validation/step0.md`의 Synthetic test 자리만 있음 |
+| **지오코딩 폴백 다단계** | TourAPI → Kakao Local → Nominatim 3단계 호출이 매번 발생 | `analyze.py:geocode_single` |
+
+---
+
+## 2. TourAPI 벌크 데이터가 해결하는 것 (매핑)
+
+| 기존 한계 | 벌크 CSV 보유 후 해결 방식 |
+|---|---|
+| 운영시간 결측 | `detailIntro2`로 contentTypeId별 운영시간(usetime, opentime, restdate) 사전 수집 → 검증 시 룩업만 |
+| 카테고리 결측 | `areaBasedList2`의 cat1/cat2/cat3 필드 + `categoryCode2`의 분류체계로 INTENT_VECTORS 정합 |
+| 지오코딩 다단계 호출 | 26만 POI의 (mapx, mapy)가 미리 확보됨 → TourAPI 호출 없이 정확 일치/유사도 매칭 |
+| 임계값 통계적 빈약 | 26만 POI를 조합해 합성 일정 수천 개 생성 → 분포 기반 임계값 재산출 |
+| 합성 평가 부재 | 동일 데이터셋에서 "비효율 일정"을 의도적으로 만들어 탐지율 측정 가능 |
+
+---
+
+## 3. 새 phase 구조 제안 (`phase -1: data-lake` 추가)
+
+기존 phase 0~6을 유지하되, **선행 phase `-1`** 을 추가한다. 이게 모든 phase의 입력 자산이 된다.
+
+```
+phase -1: data-lake          ← 신규
+  ├─ step 0: bulk_collect    ← 본 작업 (CSV 변환)
+  ├─ step 1: schema_normalize  cat1·cat2·cat3 + 좌표 정합성 + 운영시간 파싱
+  ├─ step 2: enrich_operating  detailIntro2 호출로 운영시간 보강
+  └─ step 3: build_indexes     이름→contentid, 좌표→격자 룩업 인덱스 생성
+
+phase 0: setup               ← 기존 (영향 없음)
+phase 1: data                ← TourAPIClient를 "API → CSV 룩업"으로 변경
+phase 2: matrix              ← 변경 없음 (Kakao Mobility는 그대로 필요)
+phase 3: graph               ← Area 노드를 cat1/cat2/cat3 hierarchy로 확장
+phase 4: validation
+  ├─ step 0: hard-fail       ← 운영시간 룩업 강화
+  ├─ step 1: warning         ← INTENT_VECTORS calibration
+  ├─ step 2: scoring         ← 임계값 재산출
+  └─ step 3: synthetic_eval  ← 신규: 합성 일정 생성 + 탐지율 측정
+phase 5: explain             ← 카테고리 명·운영시간 더 풍부한 fact 인용 가능
+phase 6: api                 ← 변경 없음
+```
+
+---
+
+## 4. 데이터 자산 구조 설계
+
+CSV는 **3개 분리된 정규화 테이블**로 저장한다 (조인 키: `contentid`).
+
+### 4-1. `pois.csv` — 핵심 POI 마스터 (예상 26만 row)
+
+| 컬럼 | 의미 | 출처 |
+|---|---|---|
+| contentid | TourAPI 고유 ID (조인 키) | areaBasedList2 |
+| contenttypeid | 12=관광지, 14=문화시설, 15=축제, 25=여행코스, 28=레포츠, 32=숙박, 38=쇼핑, 39=음식점 | areaBasedList2 |
+| title | 장소명 (정규화 키) | areaBasedList2 |
+| addr1, addr2 | 주소 | areaBasedList2 |
+| mapx, mapy | 경도·위도 (좌표) | areaBasedList2 |
+| areacode, sigungucode | 광역·기초 지자체 코드 | areaBasedList2 |
+| cat1, cat2, cat3 | 분류체계 3단계 (PurposeFit 계산용) | areaBasedList2 |
+| firstimage, firstimage2 | 대표 이미지 URL | areaBasedList2 |
+| createdtime, modifiedtime | 등록·수정 시각 (캐시 무효화 기준) | areaBasedList2 |
+
+### 4-2. `operating_hours.csv` — 운영시간·휴무일 (예상 5~10만 row, 옵션)
+
+| 컬럼 | 의미 |
+|---|---|
+| contentid | 조인 키 |
+| usetime / opentime | 운영시간 원문 (예: "09:00~18:00") |
+| restdate | 휴무일 원문 (예: "월요일") |
+| open_start, open_end | 파싱된 분 단위 정수 (Hard Fail 검증용) |
+| parse_confidence | "high"/"mid"/"low" — 정형/비정형 구분 |
+
+> 별도 테이블 분리 이유: detailIntro2는 호출 비용이 크고, contentTypeId마다 응답 스키마가 달라 별도 enrich 단계 필요.
+
+### 4-3. `category_codes.csv` — 분류체계 메타 (수십~수백 row)
+
+| 컬럼 | 의미 |
+|---|---|
+| code | cat1/cat2/cat3 코드 |
+| name | 한글 명칭 ("문화시설", "박물관" 등) |
+| level | 1/2/3 |
+| parent_code | 상위 분류 |
+
+→ INTENT_VECTORS의 카테고리 매핑을 사람이 읽을 수 있는 형태로 생성 가능.
+
+---
+
+## 5. 기존 phase 영향 분석
+
+### 5-1. `phase 1-data` — TourAPIClient 재설계
+
+**현재**: 매 호출마다 `searchKeyword2` HTTP 요청 → 평균 200~500ms 지연.
+**변경**: `pois.csv`를 메모리 인덱스(이름 → row)로 로드 → **O(1) 룩업, ~10μs**.
+
+```python
+class TourAPIClient:
+    def __init__(self, csv_path: str):
+        self._df = pd.read_csv(csv_path)
+        self._name_index = {row.title: row for row in self._df.itertuples()}
+
+    async def get_poi(self, name: str) -> POI:
+        # 1. 정확 일치 시도
+        if name in self._name_index: return self._to_poi(self._name_index[name])
+        # 2. 유사도 매칭 (rapidfuzz) — 공공DB의 표기 차이 흡수
+        match = process.extractOne(name, self._name_index.keys(), score_cutoff=85)
+        if match: return self._to_poi(self._name_index[match[0]])
+        # 3. 마지막 수단: live API (Kakao Local 폴백)
+        return await self._fallback(name)
+```
+
+→ 검증 응답속도 대폭 개선, API 의존 최소화.
+
+### 5-2. `phase 4-validation` — 임계값 재calibration 절차
+
+`phase -1`이 끝나면, **합성 일정 생성기**로 분포를 재추출:
+
+```python
+def synthesize_random_itineraries(pois_df, n=10000):
+    # 같은 sigungucode 안에서 4~8개 랜덤 추출 → "정상" 일정
+    # 다른 sigungucode 섞어서 4~8개 추출 → "비효율" 일정
+    ...
+
+# 기존 분석 파이프라인 재사용
+results = [analyze_day(itinerary) for itinerary in synthesize_random_itineraries(...)]
+
+# 새 임계값 = 정상군 P75/P90
+new_threshold = {
+    "travel_ratio_warn": np.percentile(normal_ratios, 75),
+    "travel_ratio_crit": np.percentile(normal_ratios, 90),
+}
+```
+
+표본이 100배(101→10,000+)로 늘어 **통계적 유의성 확보**, 기간(당일/1박/2박)·테마(자연/도시)별 분리 calibration도 가능.
+
+### 5-3. `phase 4-validation/step3` — 합성 평가 (신규 step)
+
+| 합성 시나리오 | 기대 검증 결과 |
+|---|---|
+| 같은 sigungu 내 4개 POI | 모든 점수 양호 |
+| 서울 ↔ 부산 같은 날 섞기 | Cluster Dispersion -10, max_dist > 300km |
+| 운영시간 09~18 POI를 19시 도착으로 배치 | OPERATING_HOURS_CONFLICT Hard Fail |
+| 동일 cat3(예: 박물관) 5연속 | AREA_REVISIT Warning |
+| 도보 이동 가정으로 30km 일정 | PHYSICAL_STRAIN Warning |
+
+→ **탐지율(precision/recall) 측정** 이 가능해진다. 현재는 "이론상 잘 잡을 것" 수준에서 멈춰 있음.
+
+### 5-4. `phase 5-explain` — 인용 가능한 fact 풍부화
+
+LLM 프롬프트에 cat1/cat2/cat3 한글 명을 함께 전달:
+
+```
+Fact: "남산서울타워(문화시설>전망대)" 18:30 도착, 운영 09:00~22:30 (잔여 240분)
+Rule: 종료 60분 이내 도착 시 -5
+Risk: 운영 안전성 양호 (잔여 240분으로 충분)
+Suggestion: -
+```
+
+→ "왜 이 카테고리에서 이런 점수가 나왔는지" 가 더 명확해진다.
+
+---
+
+## 6. 신규 가능 capability
+
+데이터 자산 보유로 가능해지는 신규 기능 후보 (MVP 외 확장):
+
+| 기능 | 활용 데이터 | 사용자 시나리오 |
+|---|---|---|
+| **POI 검색·자동완성** | pois.csv title/addr 인덱스 | 사용자가 일정 입력 시 오타 보정 |
+| **계절/요일 위험 가점** | operating_hours.csv restdate | "월요일 휴무 박물관" 자동 탐지 |
+| **축제/이벤트 충돌 검사** | searchFestival2 → events.csv | 입력 날짜에 해당 지역 축제 동시 추천 |
+| **반려동물 동반 가능 필터** | detailPetTour2 → pet_friendly.csv | "petOK"만 필터링한 검증 |
+| **카테고리 분포 시각화** | cat1/cat2/cat3 + 일정 | "이 일정의 80%가 음식점" 같은 인사이트 |
+| **지자체별 벤치마크** | sigungucode 그룹화 | "서울 강남구 평균 일정 점수 vs 사용자 점수" |
+
+---
+
+## 7. 데이터 거버넌스 / 운영 정책
+
+### 7-1. 갱신 주기
+
+| 데이터 | 갱신 주기 | 방법 |
+|---|---|---|
+| pois.csv | 월 1회 | `areaBasedSyncList2`로 modifiedtime > 마지막 동기화 시점만 incremental |
+| operating_hours.csv | 분기 1회 | detailIntro2 일괄 재호출 (운영시간 변경 빈도 낮음) |
+| category_codes.csv | 변경 시 (드뭄) | categoryCode2 |
+| events.csv (축제) | 주 1회 | searchFestival2 (eventStartDate ≤ 오늘+90일) |
+
+### 7-2. 무결성 검증
+
+- 한국 좌표 경계(`KR_LAT=33~38.7, KR_LON=124.5~132`) 위반 row 제거 (이미 `analyze.py`에 동일 로직 존재).
+- contentid 중복 제거.
+- mapx/mapy NULL 비율 모니터링 — 임계값 초과 시 알림.
+
+### 7-3. 라이선스
+
+TourAPI는 **공공누리 4유형**(출처 표시 + 비상업적). 검증 엔진 자체에는 영향 없으나, **재배포 시 출처 명시 필수**. README에 추가 필요.
+
+---
+
+## 8. 마일스톤
+
+| 주차 | 작업 | 산출물 |
+|---|---|---|
+| **W1** | TourAPI 벌크 수집 스크립트 작성 + 1차 실행 | pois.csv (전국 26만) |
+| W2 | detailIntro2 enrich (운영시간) | operating_hours.csv |
+| W3 | TourAPIClient를 CSV 룩업으로 교체 + 통합 테스트 | phase 1-data 갱신 |
+| W4 | 합성 일정 생성기 + 임계값 재calibration | new threshold 표 + 통계 보고서 |
+| W5 | phase 4 step3 (synthetic_eval) | 탐지율 측정 결과 |
+| W6 | LLM 프롬프트 v2 (cat1/cat2/cat3 통합) | phase 5-explain 갱신 |
+
+> 본 문서는 **W1 진입 시점**의 기획서. W3 이후 실측 데이터로 phase 4의 임계값을 재산출하면 본 문서의 "예상 효과"를 정량 검증할 수 있다.
+
+---
+
+## 9. 위험 요소 & 대응
+
+| 위험 | 대응 |
+|---|---|
+| TourAPI 일일 호출 한도 초과 | 페이지당 numOfRows=100, 일일 약 5만 호출 한도 가정 → 26만 POI는 5일에 분산 수집 (resume 지원) |
+| 운영시간 표기 비정형 ("월~금 09~18, 토 10~17") | 정규식 + 신뢰도 등급 부여, 파싱 실패 시 Hard Fail 스킵 (기존 정책 유지) |
+| 카테고리 분포 불균형 (음식점 과다 등) | INTENT_VECTORS 가중치를 실제 분포 기반으로 재산출 |
+| CSV 파일 크기 (~수백 MB) | parquet 포맷 병행 검토, git LFS 또는 .gitignore 처리 |
+
+---
+
+## 10. 본 기획서 체크리스트 (다음 작업 전 확인)
+
+- [ ] TourAPI 벌크 수집 스크립트 실행 → pois.csv 생성 완료
+- [ ] CSV 행 수와 contentid unique 수 일치 확인
+- [ ] mapx/mapy NULL 비율 < 1% 확인
+- [ ] cat1/cat2/cat3 NULL 비율 < 5% 확인
+- [ ] 본 문서의 phase -1 step별 작업 정의 (`phases/-1-data-lake/step{0..3}.md`) 작성
+- [ ] phase 4 임계값 재산출 후 README "실증 분석 결과" 섹션 갱신
