@@ -1,4 +1,4 @@
-<!-- updated: 2026-04-25 | hash: c7bea65d | summary: 트리플 최종 실측 반영 — geo 96.6%, travel_ratio n=89, 경고 9.0%, 위험 3.4%, 백트래킹 32.3% -->
+<!-- updated: 2026-04-26 | hash: dbdc47e6 | summary: VRPTW QA 방법론 추가 — 구석구석 55.4%, 트리플 43.0% 개선 대상 확인 -->
 
 # 관광 일정 QA 엔진 — Explainable Travel Plan Validator
 
@@ -62,6 +62,100 @@
 - 이동 비율 평균 0.143 · 경고 9.0% · 위험 3.4% — 구석구석 대비 절반 수준
 - 도시 내 집중형이나 최대 직선거리 평균 21.5km, 백트래킹 32.3%로 문제 존재
 - **"검증 가능성"이 추천 품질의 또 다른 축**임을 시사
+
+---
+
+## VRPTW 기반 QA 방법론
+
+### 적용 타당성 판단 — 실증 데이터 근거
+
+VRPTW(Vehicle Routing Problem with Time Windows)를 AI 추천 경로의 품질 평가에 적용할 수 있는지를 두 데이터셋(n=194일)으로 검증했다.
+
+#### 핵심 수치
+
+| 지표 | 구석구석 (n=101일) | 트리플 (n=93일) |
+|------|-------------------|----------------|
+| **VRPTW 개선 가능 케이스** (백트래킹 또는 이동비율 ≥0.2) | **55.4%** (56/101) | **43.0%** (40/93) |
+| 백트래킹 발생률 | 44.6% (45일) | 32.3% (30일) |
+| 이동비율 경고 (≥0.2) | 16.8% | 12.4% |
+| 평균 POI 수 | **4.3개** (max 6) | — |
+| 지역 전환 발생 | 89.1% | 92.5% |
+| 최대 지리 분산 | 309.4km | 300.6km |
+
+#### 결론: 적용 타당
+
+**개선 근거:**
+- 두 데이터셋 모두 40~55%의 일정이 순서 최적화 여지를 가짐
+- POI 수 평균 4.3개(max 6) → OR-Tools로 밀리초 수준 최적해 계산 가능, NP-hard 복잡도 문제 없음
+- 운영시간(Time Window) 고려 없이 생성된 AI 추천이 대부분 → VRPTW는 이를 제약으로 명시적으로 처리함
+
+**한계 (VRPTW만으로 해결 불가한 케이스):**
+- 광역 분산(>50km) 일정: 구석구석 16.8%, 트리플 5.4% → 순서 변경이 아닌 "장소 교체·제거" 필요
+- 백트래킹이 있어도 travel_ratio가 낮은 경우 존재 (콤팩트한 지역 내 왕복) → VRPTW 개선폭이 미미할 수 있음
+
+---
+
+### QA 파이프라인: VRPTW + 휴리스틱
+
+단순 "최적 순서 찾기"를 넘어, **AI가 생성한 순서와 수학적 최적 순서를 대조**해 품질을 정량 평가한다.
+
+```
+[입력] AI 추천 경로 (장소 순서, 좌표, 운영시간)
+          ↓
+[Step 1] TimeMatrix 구성
+          ├─ cache_route.json 존재 → Kakao 실주행 시간 사용
+          └─ 없음 → Haversine 30km/h 폴백
+          ↓
+[Step 2] 시계열 시뮬레이션 (사용자 순서 그대로)
+          ├─ Time Window 위반 탐지 → CRITICAL
+          ├─ Safety Margin 위반 (종료 60분 이내 도착) → CRITICAL
+          └─ 피로도 계산 (총 일정 > 12시간) → WARNING
+          ↓
+[Step 3] VRPTW 최적 순서 계산 (OR-Tools)
+          ├─ 목표: 최소 이동 시간
+          ├─ 제약: Time Window + 대기 허용(Slack)
+          └─ Depot 고정: 2박3일 이상은 숙소 출발/귀환 강제
+          ↓
+[Step 4] Efficiency Gap 계산
+          = (사용자 경로 시간 - 최적 경로 시간) / 최적 경로 시간
+          ≥ 20% → "효율성 낮음" WARNING
+          ↓
+[Step 5] Risk Score 산출 (100점 만점)
+          - CRITICAL 이슈 당 -15점
+          - WARNING 이슈 당 -5점
+          - Efficiency Gap 초과분 추가 감점
+          - 피로 시간당 -10점 (12시간 초과분)
+          ↓
+[출력] VRPTWResult
+    • risk_score + PASS/FAIL (기준: 60점)
+    • 사용자 순서 vs 최적 순서 비교표 (일별)
+    • Deep Dive: Fact · Rule · Risk · Suggestion
+```
+
+#### Risk Score 채점 기준
+
+| 항목 | 감점 | 판정 기준 |
+|------|------|----------|
+| Time Window 위반 | -15점/건 | CRITICAL |
+| Safety Margin (종료 60분 이내) | -15점/건 | CRITICAL |
+| Depot 제약 미준수 | -15점/건 | CRITICAL |
+| Efficiency Gap > 20% | -5점 + 초과분 보정 | WARNING |
+| 피로도 (12시간 초과) | -10점/시간 | WARNING |
+| PASS 기준 | 60점 이상 | — |
+
+#### Fact-Rule-Risk-Suggestion 출력 예시
+
+```
+Fact       '남대문시장' 도착 예정 17:42, 영업 종료 18:00 — 18분 여유
+Rule       safety_margin: 종료 60분 이내 도착
+Risk       CRITICAL — 60분 미만 여유 시 관람 불가 리스크
+Suggestion '남대문시장'을 일정 앞부분으로 이동하거나 이전 장소 체류시간을 단축하세요.
+
+Fact       사용자 이동시간 5,400초 vs 최적 3,200초 (Efficiency Gap 68.8%)
+Rule       efficiency_gap: 최적 대비 20% 초과
+Risk       WARNING — 방문 순서 비효율
+Suggestion VRPTW 최적 순서: A → C → B → D 로 재배치 시 이동 37분 절감
+```
 
 ---
 
