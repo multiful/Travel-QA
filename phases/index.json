@@ -1,0 +1,11 @@
+{
+  "phases": [
+    { "dir": "0-setup",      "status": "pending" },
+    { "dir": "1-data",       "status": "pending" },
+    { "dir": "2-matrix",     "status": "pending" },
+    { "dir": "3-graph",      "status": "pending" },
+    { "dir": "4-validation", "status": "pending" },
+    { "dir": "5-explain",    "status": "pending" },
+    { "dir": "6-api",        "status": "pending" }
+  ]
+}

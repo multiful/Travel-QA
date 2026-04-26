@@ -1,0 +1,7 @@
+{
+  "project": "Explainable Travel Plan Validator",
+  "phase": "2-matrix",
+  "steps": [
+    { "step": 0, "name": "travel-matrix", "status": "pending" }
+  ]
+}

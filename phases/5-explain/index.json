@@ -1,0 +1,9 @@
+{
+  "project": "Explainable Travel Plan Validator",
+  "phase": "5-explain",
+  "steps": [
+    { "step": 0, "name": "prompts",        "status": "pending" },
+    { "step": 1, "name": "explain-engine", "status": "pending" },
+    { "step": 2, "name": "orchestrator",   "status": "pending" }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "project": "Explainable Travel Plan Validator",
+  "phase": "4-validation",
+  "steps": [
+    { "step": 0, "name": "hard-fail", "status": "pending" },
+    { "step": 1, "name": "warning",   "status": "pending" },
+    { "step": 2, "name": "scoring",   "status": "pending" }
+  ]
+}

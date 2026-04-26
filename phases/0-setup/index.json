@@ -1,0 +1,8 @@
+{
+  "project": "Explainable Travel Plan Validator",
+  "phase": "0-setup",
+  "steps": [
+    { "step": 0, "name": "python-env",   "status": "pending" },
+    { "step": 1, "name": "src-scaffold", "status": "pending" }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -X utf8 -c ' *)",
+      "Bash(pip show *)",
+      "Bash(python -X utf8 phases/0-setup/visualize.py)"
+    ]
+  }
+}

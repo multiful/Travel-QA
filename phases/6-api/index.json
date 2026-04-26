@@ -1,0 +1,8 @@
+{
+  "project": "Explainable Travel Plan Validator",
+  "phase": "6-api",
+  "steps": [
+    { "step": 0, "name": "api-schemas", "status": "pending" },
+    { "step": 1, "name": "api-routes",  "status": "pending" }
+  ]
+}

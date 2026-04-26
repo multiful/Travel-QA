@@ -1,0 +1,9 @@
+{
+  "project": "Explainable Travel Plan Validator",
+  "phase": "1-data",
+  "steps": [
+    { "step": 0, "name": "data-models",      "status": "pending" },
+    { "step": 1, "name": "tour-api-client",  "status": "pending" },
+    { "step": 2, "name": "kakao-client",     "status": "pending" }
+  ]
+}

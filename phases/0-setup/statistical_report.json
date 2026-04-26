@@ -1,0 +1,330 @@
+{
+  "summary": {
+    "total_days": 101,
+    "valid_route_days": 101,
+    "no_route_days": 0,
+    "geo_coverage_pct": 95.6
+  },
+  "travel_ratio": {
+    "mean": 0.143,
+    "median": 0.073,
+    "stdev": 0.177,
+    "cv": 1.238,
+    "p25": 0.048,
+    "p75": 0.106,
+    "p90": 0.45,
+    "min": 0.0,
+    "max": 0.755,
+    "warn_n": 17,
+    "warn_pct": 16.8,
+    "crit_n": 12,
+    "crit_pct": 11.9
+  },
+  "by_duration": {
+    "1박 2일": {
+      "n": 38,
+      "mean": 0.083,
+      "median": 0.06,
+      "crit_n": 1
+    },
+    "당일여행": {
+      "n": 15,
+      "mean": 0.195,
+      "median": 0.075,
+      "crit_n": 3
+    },
+    "2박 3일": {
+      "n": 48,
+      "mean": 0.175,
+      "median": 0.093,
+      "crit_n": 8
+    }
+  },
+  "geo_spread_crit_n": 17,
+  "backtrack_pct": 44.6,
+  "over_12h_days": 9,
+  "extreme_cases": [
+    {
+      "num": 48,
+      "region": "대구",
+      "duration": "1박 2일",
+      "day": 2,
+      "travel_ratio": 0.755,
+      "travel_min": 925.0,
+      "total_hr": 20.42
+    },
+    {
+      "num": 31,
+      "region": "제주",
+      "duration": "당일여행",
+      "day": 1,
+      "travel_ratio": 0.697,
+      "travel_min": 690.9,
+      "total_hr": 16.51
+    },
+    {
+      "num": 50,
+      "region": "충남",
+      "duration": "2박 3일",
+      "day": 2,
+      "travel_ratio": 0.647,
+      "travel_min": 715.1,
+      "total_hr": 18.42
+    },
+    {
+      "num": 32,
+      "region": "부산",
+      "duration": "2박 3일",
+      "day": 1,
+      "travel_ratio": 0.602,
+      "travel_min": 545.0,
+      "total_hr": 15.08
+    },
+    {
+      "num": 34,
+      "region": "서울",
+      "duration": "2박 3일",
+      "day": 1,
+      "travel_ratio": 0.602,
+      "travel_min": 317.6,
+      "total_hr": 8.79
+    },
+    {
+      "num": 24,
+      "region": "서울",
+      "duration": "2박 3일",
+      "day": 3,
+      "travel_ratio": 0.592,
+      "travel_min": 521.9,
+      "total_hr": 14.7
+    },
+    {
+      "num": 29,
+      "region": "강원",
+      "duration": "당일여행",
+      "day": 1,
+      "travel_ratio": 0.592,
+      "travel_min": 435.4,
+      "total_hr": 12.26
+    },
+    {
+      "num": 10,
+      "region": "전남",
+      "duration": "2박 3일",
+      "day": 2,
+      "travel_ratio": 0.565,
+      "travel_min": 506.0,
+      "total_hr": 14.93
+    },
+    {
+      "num": 10,
+      "region": "전남",
+      "duration": "2박 3일",
+      "day": 3,
+      "travel_ratio": 0.527,
+      "travel_min": 233.6,
+      "total_hr": 7.39
+    },
+    {
+      "num": 38,
+      "region": "경남",
+      "duration": "2박 3일",
+      "day": 2,
+      "travel_ratio": 0.505,
+      "travel_min": 397.8,
+      "total_hr": 13.13
+    },
+    {
+      "num": 15,
+      "region": "광주",
+      "duration": "2박 3일",
+      "day": 2,
+      "travel_ratio": 0.45,
+      "travel_min": 368.8,
+      "total_hr": 13.65
+    },
+    {
+      "num": 11,
+      "region": "경북",
+      "duration": "당일여행",
+      "day": 1,
+      "travel_ratio": 0.407,
+      "travel_min": 205.7,
+      "total_hr": 8.43
+    },
+    {
+      "num": 47,
+      "region": "대구",
+      "duration": "2박 3일",
+      "day": 1,
+      "travel_ratio": 0.385,
+      "travel_min": 187.5,
+      "total_hr": 8.12
+    },
+    {
+      "num": 41,
+      "region": "대전",
+      "duration": "2박 3일",
+      "day": 2,
+      "travel_ratio": 0.367,
+      "travel_min": 225.8,
+      "total_hr": 10.26
+    },
+    {
+      "num": 7,
+      "region": "충북",
+      "duration": "당일여행",
+      "day": 1,
+      "travel_ratio": 0.361,
+      "travel_min": 203.4,
+      "total_hr": 9.39
+    },
+    {
+      "num": 37,
+      "region": "경북",
+      "duration": "2박 3일",
+      "day": 3,
+      "travel_ratio": 0.309,
+      "travel_min": 134.0,
+      "total_hr": 7.23
+    }
+  ],
+  "dist_crit_cases": [
+    {
+      "num": 24,
+      "region": "서울",
+      "duration": "2박 3일",
+      "day": 3,
+      "max_dist_km": 309.4,
+      "travel_ratio": 0.592
+    },
+    {
+      "num": 31,
+      "region": "제주",
+      "duration": "당일여행",
+      "day": 1,
+      "max_dist_km": 288.57,
+      "travel_ratio": 0.697
+    },
+    {
+      "num": 10,
+      "region": "전남",
+      "duration": "2박 3일",
+      "day": 2,
+      "max_dist_km": 268.4,
+      "travel_ratio": 0.565
+    },
+    {
+      "num": 10,
+      "region": "전남",
+      "duration": "2박 3일",
+      "day": 3,
+      "max_dist_km": 261.57,
+      "travel_ratio": 0.527
+    },
+    {
+      "num": 32,
+      "region": "부산",
+      "duration": "2박 3일",
+      "day": 1,
+      "max_dist_km": 259.48,
+      "travel_ratio": 0.602
+    },
+    {
+      "num": 48,
+      "region": "대구",
+      "duration": "1박 2일",
+      "day": 2,
+      "max_dist_km": 238.22,
+      "travel_ratio": 0.755
+    },
+    {
+      "num": 38,
+      "region": "경남",
+      "duration": "2박 3일",
+      "day": 2,
+      "max_dist_km": 231.8,
+      "travel_ratio": 0.505
+    },
+    {
+      "num": 29,
+      "region": "강원",
+      "duration": "당일여행",
+      "day": 1,
+      "max_dist_km": 219.58,
+      "travel_ratio": 0.592
+    },
+    {
+      "num": 15,
+      "region": "광주",
+      "duration": "2박 3일",
+      "day": 2,
+      "max_dist_km": 189.82,
+      "travel_ratio": 0.45
+    },
+    {
+      "num": 50,
+      "region": "충남",
+      "duration": "2박 3일",
+      "day": 2,
+      "max_dist_km": 185.12,
+      "travel_ratio": 0.647
+    },
+    {
+      "num": 34,
+      "region": "서울",
+      "duration": "2박 3일",
+      "day": 1,
+      "max_dist_km": 153.85,
+      "travel_ratio": 0.602
+    },
+    {
+      "num": 7,
+      "region": "충북",
+      "duration": "당일여행",
+      "day": 1,
+      "max_dist_km": 150.73,
+      "travel_ratio": 0.361
+    },
+    {
+      "num": 41,
+      "region": "대전",
+      "duration": "2박 3일",
+      "day": 2,
+      "max_dist_km": 133.56,
+      "travel_ratio": 0.367
+    },
+    {
+      "num": 37,
+      "region": "경북",
+      "duration": "2박 3일",
+      "day": 3,
+      "max_dist_km": 118.82,
+      "travel_ratio": 0.309
+    },
+    {
+      "num": 47,
+      "region": "대구",
+      "duration": "2박 3일",
+      "day": 1,
+      "max_dist_km": 94.45,
+      "travel_ratio": 0.385
+    },
+    {
+      "num": 11,
+      "region": "경북",
+      "duration": "당일여행",
+      "day": 1,
+      "max_dist_km": 89.97,
+      "travel_ratio": 0.407
+    },
+    {
+      "num": 15,
+      "region": "광주",
+      "duration": "2박 3일",
+      "day": 3,
+      "max_dist_km": 57.54,
+      "travel_ratio": 0.222
+    }
+  ]
+}
