@@ -8,6 +8,8 @@ from typing import Literal
 from pydantic import BaseModel, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
+from src.data.theme_taxonomy import PLACE_TYPES, TRAVEL_STYLES
+
 
 # ---------------------------------------------------------------------------
 # Main application models
@@ -65,12 +67,14 @@ class POI(BaseModel):
 
 class PlaceInput(BaseModel):
     name: str
-    stay_minutes: int
-    visit_order: int
+    stay_minutes: int | None = None  # None → pipeline에서 dwell_db 자동 추정
+    visit_order: int | None = None   # None → ItineraryPlan에서 리스트 순서 자동 할당
 
     @field_validator("stay_minutes")
     @classmethod
-    def validate_stay(cls, v: int) -> int:
+    def validate_stay(cls, v: int | None) -> int | None:
+        if v is None:
+            return v
         if v <= 0:
             raise ValueError("stay_minutes must be > 0")
         if v > 720:
@@ -79,17 +83,46 @@ class PlaceInput(BaseModel):
 
     @field_validator("visit_order")
     @classmethod
-    def validate_order(cls, v: int) -> int:
+    def validate_order(cls, v: int | None) -> int | None:
+        if v is None:
+            return v
         if v < 1:
             raise ValueError("visit_order must be >= 1")
         return v
 
 
+class UserPreferences(BaseModel):
+    """API 입력용 테마 선호.
+
+    pipeline에서 theme_taxonomy.UserPreferences(dataclass)로 변환해 사용.
+    place_types / travel_styles 는 theme_taxonomy에 정의된 값만 허용.
+    """
+    place_types: list[str] = []
+    travel_styles: list[str] = []
+
+    @field_validator("place_types")
+    @classmethod
+    def validate_place_types(cls, v: list[str]) -> list[str]:
+        invalid = [p for p in v if p not in PLACE_TYPES]
+        if invalid:
+            raise ValueError(f"허용되지 않는 장소 유형: {invalid}. 허용값: {PLACE_TYPES}")
+        return v
+
+    @field_validator("travel_styles")
+    @classmethod
+    def validate_travel_styles(cls, v: list[str]) -> list[str]:
+        invalid = [s for s in v if s not in TRAVEL_STYLES]
+        if invalid:
+            raise ValueError(f"허용되지 않는 여행 스타일: {invalid}. 허용값: {TRAVEL_STYLES}")
+        return v
+
+
 class ItineraryPlan(BaseModel):
     places: list[PlaceInput]
-    transport: Literal["transit", "car", "walk"]
-    travel_type: Literal["cultural", "nature", "shopping", "food", "adventure"]
+    transport: Literal["transit", "car", "walk"] = "transit"
+    travel_type: Literal["cultural", "nature", "shopping", "food", "adventure"] | None = None
     date: str  # YYYY-MM-DD
+    user_preferences: UserPreferences | None = None  # None → theme_alignment 스킵
 
     @field_validator("places")
     @classmethod
@@ -100,9 +133,19 @@ class ItineraryPlan(BaseModel):
             raise ValueError("ItineraryPlan must have at most 8 places")
         return v
 
+    @model_validator(mode="after")
+    def auto_fill_visit_order(self) -> "ItineraryPlan":
+        """visit_order 미입력 시 리스트 위치(1-based)로 자동 할당."""
+        for i, place in enumerate(self.places):
+            if place.visit_order is None:
+                place.visit_order = i + 1
+        return self
+
     @computed_field
     def plan_id(self) -> str:
-        key = "_".join(p.name for p in sorted(self.places, key=lambda x: x.visit_order)) + self.date
+        key = "_".join(
+            p.name for p in sorted(self.places, key=lambda x: x.visit_order or 0)
+        ) + self.date
         return hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
