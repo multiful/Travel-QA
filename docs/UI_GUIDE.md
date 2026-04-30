@@ -1,4 +1,4 @@
-<!-- updated: 2026-04-21 | hash: 5d0f1af1 | summary: REST API 엔드포인트 스펙 (POST /validate, GET /repair, GET /health) 및 안티패턴 가이드 -->
+<!-- updated: 2026-04-30 | hash: eea4cb43 | summary: Neo4j 제거 반영 (503·health 엔드포인트 갱신) -->
 # API 설계 가이드
 
 ## 설계 원칙
@@ -94,7 +94,7 @@
 **에러**
 - `400`: 장소 수 범위 초과 (4개 미만 또는 8개 초과)
 - `404`: TourAPI에서 장소를 찾을 수 없음
-- `503`: Neo4j 또는 Claude API 연결 실패
+- `503`: Claude API 또는 외부 API 연결 실패
 
 ---
 
@@ -128,14 +128,14 @@
 ---
 
 ### GET /health
-서버 + Neo4j 상태 확인.
+서버 상태 확인.
 
 **Response** (200)
 ```json
 {
   "status": "ok",
-  "neo4j": "connected",
-  "claude": "available"
+  "claude": "available",
+  "seoul_api": "available"
 }
 ```
 

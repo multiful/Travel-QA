@@ -1,4 +1,4 @@
-<!-- updated: 2026-04-21 | hash: 1fef8d95 | summary: Explainable Travel Plan Validator 요구사항, 사용자 스토리, 성공 지표 -->
+<!-- updated: 2026-04-30 | hash: 08b17a67 | summary: Neo4j 제거, 실시간 혼잡도 MVP 포함, 기술 제약 갱신 -->
 # PRD: Explainable Travel Plan Validator
 
 ## 목표
@@ -93,8 +93,7 @@ Hard Fail 존재 시: Final Score = min(계산값, 59)
 ```
 
 ## MVP 제외 사항
-- 실시간 혼잡도
-- 멀티데이 일정
+- 멀티데이 일정 (per-day 검증은 포함, 다일 간 연계는 제외)
 - 개인 체력 모델
 - 프론트엔드 UI (Swagger UI로 테스트)
 - 사용자 인증/권한
@@ -103,7 +102,7 @@ Hard Fail 존재 시: Final Score = min(계산값, 59)
 - **Explainability 우선**: 모든 판정에 증거(사실 → 규칙 → 판정 → 제안) 4단 구조 명시
 - **Constraint-based Repair**: 최적화가 아닌 제약 기반 수정 제안 (Hard Fail 제거 우선)
 - **Confidence 명시**: 데이터 한계를 Confidence Level (High / Medium / Medium-Low)로 반영
-- **Mock-first**: 외부 의존성(TourAPI, Kakao, Neo4j, Claude API)이 없어도 테스트 가능
+- **Mock-first**: 외부 의존성(TourAPI, Kakao, Seoul API, Claude API)이 없어도 테스트 가능
 
 ---
 
@@ -148,6 +147,6 @@ Hard Fail 존재 시: Final Score = min(계산값, 59)
 |------|------|---------|
 | Kakao Mobility API | B2B 신청 필요 | MVP 폴백: 직선거리 × 속도계수로 이동시간 추정 |
 | TourAPI 일일 한도 | 10,000 쿼리/키 | 검증 1회당 POI당 최대 2 API 호출 계획 |
-| Neo4j Community Edition | 단일 노드 | MVP는 단일 서버로 충분 |
-| Claude API 의존성 | 오프라인 환경에서 설명 생성 불가 | Validation 결과는 오프라인 동작; LLM 결과만 의존 |
-| Windows 환경 | — | Java 기반 NLP 도구 불사용 (본 시스템은 NLP 불필요) |
+| 서울 도시데이터 API | 서울 115개소 한정 | 미커버 POI는 한국문화관광연구원 5개년 CSV 통계로 폴백 |
+| sklearn (DBSCAN M4) | 미설치 시 M4 자동 스킵 | graceful fallback, M1-M3로 대체 |
+| Claude API 의존성 | 오프라인 환경에서 설명 생성 불가 | Validation/Scoring 결과는 오프라인 동작; LLM은 설명에만 사용 |

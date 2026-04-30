@@ -1,4 +1,4 @@
-<!-- updated: 2026-04-26 | hash: 5506321e | summary: 6개 패널티 요구사항 → VRPTW(기존) + 3개 신규 scoring 모듈 통합 설계서 -->
+<!-- updated: 2026-04-30 | hash: bafb1d66 | summary: 8개 요구사항 전부 ✅, M1-M4 DBSCAN 추가, 혼잡도 ⑦⑧ 신규 반영 -->
 # 패널티 통합 설계서 (Enhancement Plan v2)
 
 > "**진짜 갈 수 있는 길인가**"(현실 제약) + "**얼마나 좋은 경로인가**"(품질 평가) — 6개 패널티 요구사항을 VRPTW 엔진(이미 구현)과 3개 신규 scoring 모듈로 분담 처리.
@@ -19,10 +19,12 @@
 |---|---|---|---|---|
 | ① | 영업시간 준수 (Time Window) | Validation | `vrptw_engine.py` | ✅ 구현됨 (`time_window_infeasibility`) |
 | ② | 이동 시간 현실성 | Validation | `vrptw_engine.py` `CachedRouteMatrix` | 🟡 캐시 lookup만 (실시간 호출 미구현) |
-| ③ | 권장 체류 시간 | Validation | `dwell_db.py` ⭐ | ❌ 신규 |
-| ④ | 이동 vs 관광 시간 비율 | Scoring | `scoring/travel_ratio.py` ⭐ | ❌ 신규 |
-| ⑤ | 경로 밀집도 (per-day) | Scoring | `scoring/cluster_dispersion.py` ⭐ | ❌ 신규 |
-| ⑥ | 테마 일치성 (LLM 판정) | Scoring | `scoring/theme_alignment.py` ⭐ | ❌ 신규 |
+| ③ | 권장 체류 시간 | Validation | `data/dwell_db.py` | ✅ 완료 (5단계 폴백) |
+| ④ | 이동 vs 관광 시간 비율 | Scoring | `scoring/travel_ratio.py` | ✅ 완료 |
+| ⑤ | 경로 밀집도 (per-day) | Scoring | `scoring/cluster_dispersion.py` | ✅ 완료 (M1-M4 · DBSCAN M4 포함) |
+| ⑥ | 테마 일치성 (LLM 판정) | Scoring | `scoring/theme_alignment.py` | ✅ 완료 |
+| ⑦ | 혼잡도 — 서울 실시간 | Scoring | `data/seoul_citydata_client.py` | ✅ 완료 |
+| ⑧ | 혼잡도 — 전국 계절성 | Scoring | `scoring/congestion_engine.py` | ✅ 완료 (Seoul 우선, CSV 폴백) |
 
 ⭐ = 본 문서에서 신규 설계.
 
@@ -181,9 +183,21 @@ travel_ratio = travel_sec / (travel_sec + dwell_sec)
        → Day1 안에서 시군구 3회 점프 + 최대거리 320km → CRITICAL
 ```
 
-### 두 가지 메트릭 (Q3 답변: d = 둘 다)
+### 네 가지 메트릭 (M1-M4)
 
-#### 메트릭 1: 시군구 전환 횟수 (per-day)
+#### 메트릭 1 (M1): 비연속 구역 재진입 — 백트래킹 (per-day)
+
+이미 방문한 시군구에 다른 지역을 거쳐 돌아오는 횟수. 순방향 다구역 순회와 구별됨.
+
+| 재진입 횟수 | 패널티 |
+|---|---|
+| 0회 | 0 |
+| 1회 | -5 |
+| 2회 이상 | -10 |
+
+> 예: 강남→홍대→강남 = 1회 / 강남→이태원→명동→종로 = 0회
+
+#### 메트릭 2 (M2): 시군구 전환 횟수 (per-day)
 ```
 sigungu_switches = 같은 day 안에서 lDongSignguCd가 변경된 횟수
 ```
@@ -194,7 +208,7 @@ sigungu_switches = 같은 day 안에서 lDongSignguCd가 변경된 횟수
 | 3 | -5 |
 | 4 이상 | -10 |
 
-#### 메트릭 2: 최대 직선거리 (per-day)
+#### 메트릭 3 (M3): 최대 직선거리 (per-day)
 ```
 max_dist_km = 같은 day 안의 모든 좌표 쌍 중 최대 직선거리 (Haversine)
 ```
@@ -206,9 +220,21 @@ max_dist_km = 같은 day 안의 모든 좌표 쌍 중 최대 직선거리 (Haver
 | 50~100km | -10 (위험) |
 | ≥ 100km | -20 (심각 — 광역 이탈) |
 
+#### 메트릭 4 (M4): 지리 클러스터 재진입 — DBSCAN (per-day) ⭐ 추가됨
+
+M1(시군구 기반) 보완. 경주·제주 등 대형 시군구 내부 지리 분산 탐지.
+`DBSCAN(eps=2km, haversine)` per-request 즉석 계산 (<1ms). sklearn 미설치 시 스킵.
+`net = max(0, M4_count - M1_count)` 순증분만 패널티 (M1과 중복 방지).
+
+| 재진입 횟수 (순증분) | 패널티 |
+|---|---|
+| 0회 | 0 |
+| 1회 | -5 |
+| 2회 이상 | -10 |
+
 ### 중복 방지 캡
 
-두 메트릭 모두 위반 시 **합산 캡 -20** 적용. 같은 원인(번개패턴)에 대한 이중 패널티 방지.
+네 메트릭 동시 위반 시 **합산 캡 -20** 적용. 같은 원인(번개패턴)에 대한 이중 패널티 방지.
 
 ---
 

@@ -1,4 +1,4 @@
-<!-- updated: 2026-04-21 | hash: 15209309 | summary: TourAPI POI 메타데이터, Kakao Local 정규화, Kakao Mobility 이동시간 행렬 수집 가이드 -->
+<!-- updated: 2026-04-30 | hash: d0cb7ba4 | summary: 서울 도시데이터 API 섹션 추가, SEOUL_DATA_API_KEY 환경변수 반영 -->
 # 데이터 파이프라인 가이드
 
 본 시스템은 두 개의 외부 API를 데이터 소스로 사용한다:
@@ -145,10 +145,41 @@ matrix = {
 
 ---
 
-## 5. 환경변수 설정
+## 5. 서울 도시데이터 API (실시간 혼잡도)
+
+### 인증
+- 신청: https://data.seoul.go.kr → "서울 실시간 도시데이터" 검색
+- 엔드포인트: `http://openapi.seoul.go.kr:8088/{KEY}/json/citydata/1/1/{AREA_NM}`
+- 커버리지: 서울시 주요 115개소 (경복궁·인사동·명동 관광특구·홍대 관광특구 등)
+- 갱신주기: 10~15분
+
+### 응답 핵심 필드
+| 필드 | 설명 |
+|------|------|
+| `AREA_CONGEST_LVL` | 현재 혼잡도 ("여유"/"보통"/"약간 붐빔"/"붐빔") |
+| `AREA_PPLTN_MIN/MAX` | 실시간 인구 추정 범위 |
+| `PPLTN_TIME` | 측정 시각 |
+| `FCST_PPLTN` | 12시간 예측 슬롯 배열 |
+
+### 혼잡도 점수 변환
+| 레벨 | congestion_score |
+|------|-----------------|
+| 여유 | 0.1 |
+| 보통 | 0.4 |
+| 약간 붐빔 | 0.7 |
+| 붐빔 | 1.0 |
+
+### CongestionEngine 연동
+서울 소재 POI는 `SeoulCityDataClient.get(poi_name)` 성공 시 실시간 데이터 우선 사용.
+API 실패 또는 커버리지 밖이면 `data/congestion_stats.csv` (한국문화관광연구원 2020~2024) 폴백.
+
+---
+
+## 6. 환경변수 설정
 
 ```
 TOUR_API_KEY=your_tour_api_key
 KAKAO_REST_API_KEY=your_kakao_rest_api_key
 KAKAO_MOBILITY_KEY=          # 없으면 직선거리 폴백
+SEOUL_DATA_API_KEY=          # 없으면 CSV 통계 폴백
 ```

@@ -1,4 +1,4 @@
-<!-- updated: 2026-04-30 | hash: 8f69ae62 | summary: Neo4j 제거, 백트래킹 M3 추가, 혼잡도 엔진·서울 실시간 API 반영 -->
+<!-- updated: 2026-04-30 | hash: e3ab115e | summary: Cluster Dispersion M1-M4 완성 (DBSCAN M4 추가), 구현 현황 갱신 -->
 
 # 관광 일정 QA 엔진 — Explainable Travel Plan Validator
 
@@ -356,8 +356,23 @@ CRITICAL 1건이라도 존재 → final ≤ 59 (FAIL)
 | 50~100km | -10 (위험) |
 | ≥ 100km | -20 (광역 이탈) |
 
+**메트릭 4: 지리 클러스터 재진입 — DBSCAN (per-day)**
+
+메트릭 1(시군구 기반)을 보완한다. 경주·제주처럼 행정구역이 넓은 곳에서는 같은 시군구 안에서도 지리적으로 멀리 떨어진 장소를 왕복하는 패턴이 발생한다. DBSCAN(eps=2km, haversine)으로 지리 클러스터를 즉석에서 계산해 비연속 재진입을 탐지한다.
+
+> 예: 첨성대(경주 시내) → 감포해수욕장(동해안 28km) → 안압지(경주 시내 재진입) = 1회  
+> sklearn 미설치 시 자동 스킵 (graceful fallback). per-request 계산 4~8 POI 기준 <1ms.
+
+- M1과 같은 이벤트를 중복 탐지했을 경우 `net = max(0, M4_count - M1_count)` 으로 순증분만 패널티 부과.
+
+| 재진입 횟수 (순증분) | 패널티 |
+|---------------------|--------|
+| 0회 | 0 |
+| 1회 | -5 |
+| 2회 이상 | -10 |
+
 **중복 방지 캡:**  
-세 메트릭 동시 위반 시 합산 최대 **-20** 캡 적용 (같은 원인에 대한 이중 패널티 방지).
+네 메트릭 동시 위반 시 합산 최대 **-20** 캡 적용 (같은 원인에 대한 이중 패널티 방지).
 
 ---
 
@@ -702,7 +717,7 @@ Suggestion [1단계 Stay-time Tuning] 경복궁 체류 60분으로 연장 권장
 | ② | 이동 시간 현실성 (실시간 Kakao) | Validation | `vrptw_engine.py` + Kakao | 🟡 캐시 lookup만 (실시간 미구현) |
 | ③ | 체류시간 현실성 (dwell_db) | Validation | `data/dwell_db.py` | ✅ 완료 |
 | ④ | 이동 vs 관광 시간 비율 | Scoring | `scoring/travel_ratio.py` | ✅ 완료 |
-| ⑤ | 경로 밀집도 + 백트래킹 per-day | Scoring | `scoring/cluster_dispersion.py` | ✅ 완료 (M3 추가) |
+| ⑤ | 경로 밀집도 + 백트래킹 per-day | Scoring | `scoring/cluster_dispersion.py` | ✅ 완료 (M1-M4 · DBSCAN M4 포함) |
 | ⑥ | 테마 일치성 (LLM) | Scoring | `scoring/theme_alignment.py` | ✅ 완료 |
 | ⑦ | 혼잡도 — 서울 실시간 | Scoring | `data/seoul_citydata_client.py` | ✅ 완료 |
 | ⑧ | 혼잡도 — 전국 계절성 | Scoring | `scoring/congestion_engine.py` | ✅ 완료 |

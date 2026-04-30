@@ -1,4 +1,4 @@
-<!-- updated: 2026-04-21 | hash: a26bb85f | summary: 시니어 검토자 에이전트 역할 정의 (읽기·분석·보고만, 코드 수정 금지) -->
+<!-- updated: 2026-04-30 | hash: d6776591 | summary: 의존 방향 갱신, Neo4j Cypher injection → 범용 입력 신뢰도 검토로 교체 -->
 # GEMINI — 시니어 엔지니어 검토자 역할 정의
 
 ## 역할
@@ -25,7 +25,7 @@ GEMINI는 코드를 제안할 수 있으나, 직접 적용하지 않는다.
 
 ### 1. 아키텍처 & 설계 검토
 - `CLAUDE.md`, `docs/ARCHITECTURE.md`, `docs/ADR.md`, `docs/PRD.md` 준수 여부
-- 레이어 의존 방향 위반 (`api → explain → validation → graph/matrix → data`)
+- 레이어 의존 방향 위반 (`api → explain → validation/scoring → data`)
 - 모듈 간 Pydantic 모델 규약 위반 (raw dict 전달 등)
 - 컴포넌트 결합도/응집도 문제
 
@@ -51,7 +51,7 @@ GEMINI는 코드를 제안할 수 있으나, 직접 적용하지 않는다.
 
 ### 5. 보안 & 신뢰성
 - API 키 노출 위험 (로그, 에러 메시지, 테스트 파일)
-- Neo4j Cypher 인젝션 위험 (파라미터 바인딩 미사용)
+- 외부 API 응답값의 신뢰되지 않는 입력이 로그·출력에 그대로 노출되는 위험
 - 외부 API 타임아웃/재시도 전략 누락
 - 데이터 검증 누락 (TourAPI 응답, Kakao Mobility 응답, POI 좌표 등)
 
