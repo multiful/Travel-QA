@@ -1,4 +1,4 @@
-<!-- updated: 2026-04-29 | hash: 06ab00bb | summary: Mermaid 시스템 구조도·Case Study·신뢰도 등급표·ADR 추가 -->
+<!-- updated: 2026-04-30 | hash: 8f69ae62 | summary: Neo4j 제거, 백트래킹 M3 추가, 혼잡도 엔진·서울 실시간 API 반영 -->
 
 # 관광 일정 QA 엔진 — Explainable Travel Plan Validator
 
@@ -327,7 +327,19 @@ CRITICAL 1건이라도 존재 → final ≤ 59 (FAIL)
 > 구석구석 실측: 평균 36.3km, P90=157km, 17건 50km 초과  
 > 트리플 실측: 평균 21.5km, 중앙값 12.3km — 도시 집중형이나 최대 300km 이상 이상치 존재
 
-**메트릭 1: 시군구 전환 횟수 (per-day)**
+**메트릭 1: 비연속 구역 재진입 — 백트래킹 (per-day)**
+
+이미 방문한 시군구에 다른 지역을 거쳐 돌아오는 횟수. 순방향 다구역 순회와 구별됨.
+
+| 재진입 횟수 | 패널티 |
+|------------|--------|
+| 0회 | 0 (정상) |
+| 1회 | -5 |
+| 2회 이상 | -10 |
+
+> 예: 강남→홍대→강남 = 1회(WARNING) / 강남→이태원→명동→종로 = 0회(정상)
+
+**메트릭 2: 시군구 전환 횟수 (per-day)**
 
 | 횟수 | 패널티 |
 |------|--------|
@@ -335,7 +347,7 @@ CRITICAL 1건이라도 존재 → final ≤ 59 (FAIL)
 | 3회 | -5 |
 | 4회 이상 | -10 |
 
-**메트릭 2: 최대 직선거리 (per-day, Haversine)**
+**메트릭 3: 최대 직선거리 (per-day, Haversine)**
 
 | 거리 | 패널티 |
 |------|--------|
@@ -345,7 +357,7 @@ CRITICAL 1건이라도 존재 → final ≤ 59 (FAIL)
 | ≥ 100km | -20 (광역 이탈) |
 
 **중복 방지 캡:**  
-두 메트릭 동시 위반 시 합산 최대 **-20** 캡 적용 (같은 원인에 대한 이중 패널티 방지).
+세 메트릭 동시 위반 시 합산 최대 **-20** 캡 적용 (같은 원인에 대한 이중 패널티 방지).
 
 ---
 
@@ -690,8 +702,10 @@ Suggestion [1단계 Stay-time Tuning] 경복궁 체류 60분으로 연장 권장
 | ② | 이동 시간 현실성 (실시간 Kakao) | Validation | `vrptw_engine.py` + Kakao | 🟡 캐시 lookup만 (실시간 미구현) |
 | ③ | 체류시간 현실성 (dwell_db) | Validation | `data/dwell_db.py` | ✅ 완료 |
 | ④ | 이동 vs 관광 시간 비율 | Scoring | `scoring/travel_ratio.py` | ✅ 완료 |
-| ⑤ | 경로 밀집도 per-day | Scoring | `scoring/cluster_dispersion.py` | ✅ 완료 |
+| ⑤ | 경로 밀집도 + 백트래킹 per-day | Scoring | `scoring/cluster_dispersion.py` | ✅ 완료 (M3 추가) |
 | ⑥ | 테마 일치성 (LLM) | Scoring | `scoring/theme_alignment.py` | ✅ 완료 |
+| ⑦ | 혼잡도 — 서울 실시간 | Scoring | `data/seoul_citydata_client.py` | ✅ 완료 |
+| ⑧ | 혼잡도 — 전국 계절성 | Scoring | `scoring/congestion_engine.py` | ✅ 완료 |
 
 > 요구사항 ②(Kakao Mobility 실시간 호출)는 B2B API 신청 후 P4 단계에서 구현 예정.
 
@@ -733,9 +747,10 @@ Suggestion [1단계 Stay-time Tuning] 경복궁 체류 60분으로 연장 권장
 |------|------|
 | 장소 정규화·운영시간 | TourAPI (한국관광공사) |
 | 이동 시간 계산 | Kakao Mobility API |
+| 혼잡도 (서울 실시간) | 서울 도시데이터 API — 실시간 인구 + 12h 예측 |
+| 혼잡도 (전국 계절성) | 한국문화관광연구원 입장객 통계 (2020~2024 PDF) |
 | 설명 생성·개선 제안 | Claude API (claude-sonnet-4-6) |
 | HTTP API 서버 | FastAPI |
-| 일정 그래프 저장 | Neo4j (POI·Area·Time 노드) |
 
 ### 설계 결정 (ADR) — LLM 역할 분리
 

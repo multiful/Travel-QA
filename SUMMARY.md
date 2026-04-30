@@ -1,4 +1,4 @@
-<!-- updated: 2026-04-29 | hash: 91650768 | summary: 기획 단계 완성본 — 전 섹션 포맷 정리 및 내용 보강 -->
+<!-- updated: 2026-04-30 | hash: 6d3ab0e1 | summary: Neo4j 제거 확정, 백트래킹 M3 Python 구현, 혼잡도 엔진 + 서울 실시간 API 추가 -->
 
 1. 프로젝트 비전
   "우리는 여행을 추천하지 않는다. 그 일정이 실패할지, 성공할지를 증명한다."
@@ -32,8 +32,9 @@
        - ThemeAlignmentJudge: Claude API + rag(naver 검색 + ...)를 활용해 사용자 테마와 POI 카테고리 간의 의미적 일치도 판정.
          - 예시: "방문자 리뷰에서 체력 소모가 크고 어린이 동반 어렵다는 언급이 다수입니다. 가족 힐링 테마와 불일치 가능성 있음." 
     
-       - Congestion Coefficient : 시계열 데이터의 월별/시간대별 방문객 추이를 '혼잡 계수(Congestion Coefficient)'라는 정규화된 값(0.0~1.0)으로 테이블화
-         - ule Engine: 사용자 방문 예정월(Month)과 지역(Area)을 입력받아 해당 데이터의 방문객 평균치를 기반으로 '기준 체류시간'을 조정합니다.
+       - Congestion Coefficient : 시계열 데이터의 월별 방문객 추이를 '혼잡 계수(Congestion Coefficient)'라는 정규화된 값(0.0~1.0)으로 테이블화
+         - Rule Engine: 사용자 방문 예정월(Month)과 POI를 입력받아 5개년 통계 기반 혼잡도를 판정 (`src/scoring/congestion_engine.py`).
+           - 서울 소재 POI는 서울 도시데이터 API(실시간 인구 + 12시간 예측)를 우선 적용, 미커버 POI는 한국문화관광연구원 2020~2024 PDF 통계로 폴백.
          - LLM 연동: "해당 월은 통계적으로 전년 대비 방문객이 30% 증가하는 기간입니다. 이에 따라 보수적인 이동 시간을 제안합니다"라는 근거를 생성합니다.
 
   ③ 설명 엔진 (Explain Engine)
@@ -70,16 +71,14 @@
      summary_text는 RAG 임베딩용 자연어 요약 (Supabase DB 등 벡터 DB 저장 대상).
    - Theme Taxonomy: 여행 테마별 권장 POI 타입 및 스타일 매핑 테이블.
 
-  ③ 그래프 데이터베이스 (Neo4j) - 현재 구조에서 사용하는게 오버스러운 느낌이 있어서 검토 후 제거할 예정 (graph rag)
-   - 구조: (POI)-[:IN_AREA]->(Area), (POI)-[:SCHEDULED_AT]->(TimeSlot)
-   - 용도:
-       · 구역 재방문 탐지: 동일 Area 노드에 연결된 POI 시퀀스를 탐색해 비연속 재진입(백트래킹) 감지.
-       · 동선 역행 분석: SCHEDULED_AT 엣지의 시간 순서와 IN_AREA 엣지의 지리 순서를 교차 비교.
-       · 시간대별 일정 밀도: TimeSlot 노드의 연결 수로 peak-hour 과밀 탐지.
-   - Evidence 패턴 예시:
-       Fact  "강남 → 홍대 → 강남" 순서 → Area 노드 '강남' 비연속 2회 접근 탐지
-       Rule  동일 구역 재진입 횟수 ≥ 1 → 백트래킹 WARNING
-       Risk  불필요한 왕복으로 이동 시간 약 40분 추가 추정
+  ③ 백트래킹·동선 역행 탐지 — Python 순수 구현 (Neo4j 불필요)
+   - 커버리지 검증 결과 (scripts/neo4j_coverage_analysis.py): Python 로직이 Neo4j 설계 역할 100% 커버 확인 후 제거 확정.
+   - M3 `area_backtrack_count` (`src/scoring/cluster_dispersion.py`):
+       · 비연속 구역 재진입 횟수를 시군구 코드 기반으로 O(n) 탐지.
+       · "강남 → 홍대 → 강남" = 1회 → WARNING(-5), 2회 이상 → CRITICAL(-10).
+       · 순방향 4구역 순회(강남→이태원→명동→종로) = 0회 → 패널티 없음 (False-positive 없음).
+   - 동선 역행(지리 분산): M2 `max_pairwise_distance_km` + `travel_ratio` 조합으로 커버.
+   - 시간대 과밀: `travel_ratio` 임계값(20%) + VRPTW `fatigue` 탐지로 커버.
 
 4. 설계 철학
 

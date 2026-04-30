@@ -4,9 +4,12 @@
   "1일차에는 목적지 근처로, 2일차에는 또 다른 목적지" — 하루 안에서 너무
   멀리 떨어진 장소 배치 시 패널티. 다일 간 거리(Day1↔Day2)는 패널티 없음.
 
-두 메트릭 (둘 다 위반 시 합산 캡 -20 적용 — 이중 패널티 방지):
+세 메트릭 (모두 위반 시 합산 캡 -20 적용 — 이중 패널티 방지):
   M1. sigungu_switches (per-day) — 같은 day 안에서 lDongSignguCd 변경 횟수
   M2. max_pairwise_distance_km (per-day) — 같은 day 안 좌표쌍 최대 직선거리
+  M3. area_backtrack_count (per-day) — 비연속 구역 재진입 횟수 (백트래킹)
+      ex) 강남→홍대→강남 = 1회, 정방향 4구역 순회 = 0회
+      Neo4j IN_AREA 노드의 비연속 재방문 탐지와 동일한 로직을 순수 Python으로 구현.
 """
 from __future__ import annotations
 
@@ -21,6 +24,12 @@ SWITCH_WARN: int = 3       # 3회 → -5
 SWITCH_CRIT: int = 4       # 4회 이상 → -10
 PENALTY_SWITCH_WARN: int = 5
 PENALTY_SWITCH_CRIT: int = 10
+
+# ── M3: 백트래킹 임계값 ───────────────────────────────────────────────
+BACKTRACK_WARN: int = 1    # 1회 재진입 → -5
+BACKTRACK_CRIT: int = 2    # 2회 이상 → -10
+PENALTY_BACKTRACK_WARN: int = 5
+PENALTY_BACKTRACK_CRIT: int = 10
 
 # ── M2: 최대 직선거리 임계값 (km) ─────────────────────────────────────
 DIST_WARN_KM: float = 30.0
@@ -44,6 +53,24 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return 2 * R * math.asin(math.sqrt(a))
 
 
+def count_area_backtracks(sigungu_codes: list[str]) -> int:
+    """비연속 구역 재진입 횟수 계산 (M3).
+
+    이미 방문한 시군구에 다른 시군구를 거쳐 다시 돌아오는 횟수.
+    강남→홍대→강남 = 1, 강남→서초→강남→홍대→강남 = 2, 강남→서초→강남 = 1.
+    순방향 4구역 순회(강남→이태원→명동→종로) = 0.
+    """
+    seen: set[str] = set()
+    prev: str | None = None
+    count = 0
+    for code in sigungu_codes:
+        if code in seen and code != prev:
+            count += 1
+        seen.add(code)
+        prev = code
+    return count
+
+
 @dataclass(frozen=True)
 class DayDispersionMetric:
     """일자별 밀집도 측정."""
@@ -51,6 +78,7 @@ class DayDispersionMetric:
     sigungu_switches: int
     max_pairwise_km: float
     sigungu_codes_visited: list[str]
+    area_backtrack_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -86,11 +114,14 @@ def _compute_day_dispersion(
             if d > max_dist:
                 max_dist = d
 
+    backtrack = count_area_backtracks(sigungus)
+
     return DayDispersionMetric(
         day_index=day_idx,
         sigungu_switches=switches,
         max_pairwise_km=round(max_dist, 2),
         sigungu_codes_visited=list(set(sigungus)),
+        area_backtrack_count=backtrack,
     )
 
 
@@ -112,6 +143,14 @@ def _distance_penalty(dist_km: float) -> int:
     return 0
 
 
+def _backtrack_penalty(count: int) -> int:
+    if count >= BACKTRACK_CRIT:
+        return PENALTY_BACKTRACK_CRIT
+    if count >= BACKTRACK_WARN:
+        return PENALTY_BACKTRACK_WARN
+    return 0
+
+
 def evaluate_cluster_dispersion(
     days: list[VRPTWDay],
     sigungu_codes_per_day: list[list[str | None]] | None = None,
@@ -130,13 +169,27 @@ def evaluate_cluster_dispersion(
         metric = _compute_day_dispersion(idx, day.places, sg)
         per_day.append(metric)
 
-        # 두 메트릭 패널티 계산 + 합산 캡 적용
+        # 세 메트릭 패널티 계산 + 합산 캡 적용
         sw_pen = _switch_penalty(metric.sigungu_switches)
         ds_pen = _distance_penalty(metric.max_pairwise_km)
-        day_penalty = min(sw_pen + ds_pen, COMBINED_PENALTY_CAP)
+        bt_pen = _backtrack_penalty(metric.area_backtrack_count)
+        day_penalty = min(sw_pen + ds_pen + bt_pen, COMBINED_PENALTY_CAP)
         total_penalty += day_penalty
 
         # DeepDive 생성 — 위반된 메트릭만
+        if bt_pen > 0:
+            deep_dive.append(DeepDiveItem(
+                fact=(
+                    f"{idx + 1}일차 구역 백트래킹 {metric.area_backtrack_count}회 탐지 "
+                    f"(이미 방문한 시군구에 다시 되돌아옴)"
+                ),
+                rule="area_backtrack",
+                risk="WARNING" if bt_pen == PENALTY_BACKTRACK_WARN else "CRITICAL",
+                suggestion=(
+                    "이미 방문한 지역으로 되돌아가는 동선이 있습니다. "
+                    "같은 구역 방문을 연속으로 묶어 이동 낭비를 줄이세요."
+                ),
+            ))
         if sw_pen > 0:
             deep_dive.append(DeepDiveItem(
                 fact=(

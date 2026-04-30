@@ -176,9 +176,7 @@ class Settings(BaseSettings):
     tour_api_key: str = ""
     kakao_rest_api_key: str = ""
     kakao_mobility_key: str = ""
-    neo4j_uri: str = "bolt://localhost:7687"
-    neo4j_user: str = "neo4j"
-    neo4j_password: str = ""
+    seoul_data_api_key: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
