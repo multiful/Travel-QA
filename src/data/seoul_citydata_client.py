@@ -11,7 +11,6 @@ API: 서울 열린데이터광장 citydata (도시데이터 API)
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
@@ -90,7 +89,11 @@ class SeoulCityDataClient:
     """
 
     def __init__(self, api_key: str | None = None, timeout: float = 10.0) -> None:
-        self._key = api_key or os.environ.get("SEOUL_DATA_API_KEY", "")
+        if api_key:
+            self._key = api_key
+        else:
+            from src.data.models import Settings
+            self._key = Settings().seoul_data_api_key
         if not self._key:
             raise ValueError("SEOUL_DATA_API_KEY가 설정되지 않았습니다.")
         self._timeout = timeout

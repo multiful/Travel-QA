@@ -1,10 +1,8 @@
 """혼잡도 판정 엔진 — 결정론적 규칙 기반 (LLM 의존 없음).
 
-데이터 소스: data/congestion_stats.csv
-    - scripts/extract_visitor_stats.py 실행 후 생성
-
-Fallback 우선순위:
-    1. POI 정확 이름 매칭
+데이터 소스 우선순위:
+    0. 서울 도시데이터 API (실시간) — SeoulCityDataClient 주입 시 서울 소재 POI 우선 적용
+    1. POI 정확 이름 매칭 (data/congestion_stats.csv)
     2. POI 명칭 부분 문자열 매칭 (longest match)
     3. 카테고리 평균 (poi_name에 지역/유형 접두어 기반 클러스터링)
     4. 전체 평균
@@ -16,8 +14,12 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import cached_property
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from src.data.seoul_citydata_client import SeoulCityDataClient
 
 _DEFAULT_CSV = Path(__file__).parent.parent.parent / "data" / "congestion_stats.csv"
 
@@ -60,15 +62,18 @@ class CongestionEngine:
     Args:
         csv_path: congestion_stats.csv 경로 (기본값: data/congestion_stats.csv)
         category_prefix_len: 카테고리 클러스터링에 사용할 POI명 앞 글자 수
+        seoul_client: SeoulCityDataClient 인스턴스 (주입 시 서울 POI 실시간 우선 적용)
     """
 
     def __init__(
         self,
         csv_path: Path = _DEFAULT_CSV,
         category_prefix_len: int = 2,
+        seoul_client: SeoulCityDataClient | None = None,
     ) -> None:
         self._csv_path = csv_path
         self._prefix_len = category_prefix_len
+        self._seoul: SeoulCityDataClient | None = seoul_client
 
     @cached_property
     def _df(self) -> pd.DataFrame:
@@ -125,6 +130,8 @@ class CongestionEngine:
     def score(self, poi_name: str, month: int) -> CongestionResult:
         """POI와 방문 월로 혼잡도를 판정한다.
 
+        서울 POI에 SeoulCityDataClient가 주입된 경우 실시간 데이터를 우선 사용한다.
+
         Args:
             poi_name: 관광지명
             month: 1~12 (방문 월)
@@ -136,6 +143,22 @@ class CongestionEngine:
             raise ValueError(f"month must be 1-12, got {month}")
 
         norm_name = _normalize(poi_name)
+
+        # 0. 서울 도시데이터 API (실시간) — 주입된 경우만
+        if self._seoul is not None:
+            try:
+                realtime = self._seoul.get(poi_name)
+                if realtime is not None:
+                    return CongestionResult(
+                        poi_name=poi_name, month=month,
+                        congestion_score=realtime.score,
+                        level=_score_to_level(realtime.score),
+                        avg_visitors=float((realtime.ppltn_min + realtime.ppltn_max) // 2),
+                        matched_poi=realtime.area_name,
+                        fallback_used="seoul_realtime",
+                    )
+            except Exception:
+                pass  # API 실패 시 CSV 폴백으로 진행
 
         # 1. Exact match
         row = self._lookup_exact(norm_name, month)

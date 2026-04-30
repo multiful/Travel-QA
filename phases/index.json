@@ -1,10 +1,10 @@
 {
   "phases": [
-    { "dir": "0-setup",      "status": "pending" },
-    { "dir": "1-data",       "status": "pending" },
-    { "dir": "2-matrix",     "status": "pending" },
-    { "dir": "3-graph",      "status": "pending" },
-    { "dir": "4-validation", "status": "pending" },
+    { "dir": "0-setup",      "status": "completed" },
+    { "dir": "1-data",       "status": "completed" },
+    { "dir": "2-matrix",     "status": "in_progress" },
+    { "dir": "3-graph",      "status": "removed", "note": "Neo4j 제거 확정 — Python M3/M4로 100% 대체 (scripts/neo4j_coverage_analysis.py)" },
+    { "dir": "4-validation", "status": "in_progress" },
     { "dir": "5-explain",    "status": "pending" },
     { "dir": "6-api",        "status": "pending" }
   ]
