@@ -1,4 +1,4 @@
-<!-- updated: 2026-04-30 | hash: 6d3ab0e1 | summary: Neo4j 제거 확정, 백트래킹 M3 Python 구현, 혼잡도 엔진 + 서울 실시간 API 추가 -->
+<!-- updated: 2026-04-30 | hash: bf153a9c | summary: cluster_dispersion M1-M4 완성, M4 DBSCAN per-request 구현 + M3 중복 방지 명시 -->
 
 1. 프로젝트 비전
   "우리는 여행을 추천하지 않는다. 그 일정이 실패할지, 성공할지를 증명한다."
@@ -21,16 +21,23 @@
    - 구현 방식:
        - VRPTWEngine: OR-Tools를 사용해 수학적 최적 경로와 사용자 경로의 격차(Efficiency Gap) 계산.
           최적 경로는 강제 대체안이 아닌, 사용자 일정의 기회비용 벤치마크로 활용.
-          추가적으로 rag(naver 검색 + ...) + llm 를 참고해 웨이팅, 혼잡도 참고하여 유의사항을 사용자에게 제시
-         - 예시: "경복궁은 (API,블로그 20건) 분석에서 혼잡도 높음, 웨이팅 있음으로 나타납니다. 30분 체류는 입장 대기만으로 소진될 가능성이 있습니다." 
-       - 목적: 지리적으로 인접한 POI들을 동질적인 클러스터로 그룹화하여 '효율적 동선'의 물리적 기준을 제공.
+       - 목적: 사용자 경로와 OR-Tools 최적 경로의 Efficiency Gap을 수치로 산출해 이동 낭비의 기회비용을 제시.
 
-       - cluster_dispersion : DBSCAN 알고리즘 적용. POI 좌표(위도/경도)를 기반으로 고밀도 구역을 클러스터링(Distance Threshold: 도보 15분 거리).
-         - 동적 가중치: 클러스터 내부 이동은 0, 클러스터 간 이동은 높은 이동 비용(Penalty)을 부여하여 cluster_dispersion 점수 산출.
-         - 모든 클러스터링을 실시간 수행하지 말고, 지역별로 사전 클러스터링된 데이터를 db에 저장하여 조회 활용한다.
+       - cluster_dispersion : 4개 메트릭으로 하루 일정의 지리적 밀집도를 평가. 위반 합산 캡 -20.
+         - M1. sigungu_switches: 같은 day 안 시군구 전환 횟수 (≥3회 WARNING -5 / ≥4회 CRITICAL -10).
+         - M2. max_pairwise_distance_km: Haversine 기반 하루 안 최대 직선거리 (≥30km -5 / ≥50km -10 / ≥100km -20).
+         - M3. area_backtrack_count: 시군구 코드 기반 비연속 재진입 (O(n)). "강남→홍대→강남"=1회 -5, 2회+ -10.
+               순방향 4구역 순회(강남→이태원→명동→종로)=0회 → False-positive 없음.
+         - M4. geo_cluster_backtrack: DBSCAN(eps=2km, haversine) 지리 클러스터 비연속 재진입.
+               M3 보완: 경주·제주 등 대형 시군구 내부 지리 분산 탐지. M3가 이미 탐지한 이벤트는 net=max(0, count-m3_count)로 중복 패널티 제외.
+               per-request 즉석 계산 (4~8 POI → <1ms). DB 사전 클러스터링 불필요.
 
-       - ThemeAlignmentJudge: Claude API + rag(naver 검색 + ...)를 활용해 사용자 테마와 POI 카테고리 간의 의미적 일치도 판정.
-         - 예시: "방문자 리뷰에서 체력 소모가 크고 어린이 동반 어렵다는 언급이 다수입니다. 가족 힐링 테마와 불일치 가능성 있음." 
+       - ThemeAlignmentJudge: Claude API + Naver 블로그 KB(summary_text RAG 임베딩)를 활용해 사용자 테마와 POI 카테고리 간의 의미적 일치도 판정.
+         - 예시: "방문자 리뷰에서 체력 소모가 크고 어린이 동반 어렵다는 언급이 다수입니다. 가족 힐링 테마와 불일치 가능성 있음."
+         - ※ LLM 판정 유일 예외: 본 시스템은 원칙적으로 LLM을 설명 생성에만 사용하지만(section 5),
+           테마-장소 간 의미적 일치도는 규칙으로 정량화할 수 없어 LLM이 직접 0.0~1.0 점수를 판정하는
+           유일한 예외로 설계한다. 단, 판정 근거(장소 카테고리·테마 정의)는 명시적으로 프롬프트에 주입하여
+           LLM의 임의적 추론이 아닌 제공된 사실에 기반한 판정임을 보장한다.
     
        - Congestion Coefficient : 시계열 데이터의 월별 방문객 추이를 '혼잡 계수(Congestion Coefficient)'라는 정규화된 값(0.0~1.0)으로 테이블화
          - Rule Engine: 사용자 방문 예정월(Month)과 POI를 입력받아 5개년 통계 기반 혼잡도를 판정 (`src/scoring/congestion_engine.py`).
@@ -77,7 +84,11 @@
        · 비연속 구역 재진입 횟수를 시군구 코드 기반으로 O(n) 탐지.
        · "강남 → 홍대 → 강남" = 1회 → WARNING(-5), 2회 이상 → CRITICAL(-10).
        · 순방향 4구역 순회(강남→이태원→명동→종로) = 0회 → 패널티 없음 (False-positive 없음).
-   - 동선 역행(지리 분산): M2 `max_pairwise_distance_km` + `travel_ratio` 조합으로 커버.
+   - M4 `geo_cluster_backtrack` (`src/scoring/cluster_dispersion.py`):
+       · DBSCAN(eps=2km, haversine)으로 지리 클러스터 비연속 재진입 탐지.
+       · M3 보완: 경주·제주처럼 시군구가 넓어 M3가 탐지 못하는 내부 지리 분산 케이스 커버.
+       · M3 중복 방지: net = max(0, M4_count - M3_count)로 순증분만 패널티 부과.
+   - 동선 역행(지리 분산): M2 `max_pairwise_distance_km` + M4 `geo_cluster_backtrack` 조합으로 커버.
    - 시간대 과밀: `travel_ratio` 임계값(20%) + VRPTW `fatigue` 탐지로 커버.
 
 4. 설계 철학
