@@ -37,3 +37,5 @@ Thumbs.db
 
 # Harness 실행 출력
 phases/**/step*-output.json
+gun/
+.Rhistory
