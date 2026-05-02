@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 INPUT_XLSX  = ROOT / "gun/data/recommendations_input.xlsx"
 OUT_PLACE   = ROOT / "gun/data/place_hours_322.xlsx"
 OUT_STD     = ROOT / "gun/data/category_hours.xlsx"
-OUT_PY      = ROOT / "gun/src/data/hours_db.py"
+OUT_PY      = ROOT / "src/data/hours_db.py"
 
 # ─────────────────────────────────────────────────────────────────
 # Sub-category 정의 — 한국 일반 운영시간 (2025 기준 표준)

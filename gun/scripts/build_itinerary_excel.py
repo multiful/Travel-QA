@@ -39,6 +39,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.data.dwell_db import get_recommended_dwell                # noqa: E402
+from src.data.hours_db import resolve_hours, HoursSpec, to_minutes  # noqa: E402
 from src.data.models import VRPTWDay, VRPTWPlace                   # noqa: E402
 from src.scoring.cluster_dispersion import evaluate_cluster_dispersion  # noqa: E402
 from src.scoring.travel_ratio import evaluate_travel_ratio          # noqa: E402
@@ -65,8 +66,14 @@ OUTPUT_COLS = INPUT_COLS + [
     # POI 매칭 결과
     "matched_title", "contentid", "contenttypeid", "lclsSystm1", "lclsSystm3",
     "mapx", "mapy", "매칭상태",
+    # 운영시간 (hours_db)
+    "sub_category", "open", "close", "break_start", "break_end",
+    "off_days", "요일",
     # 시간 계산
     "체류시간_분", "체류출처", "다음장소_이동시간_분",
+    "도착시간", "이탈시간",
+    # 운영시간 위반
+    "운영시간_위반", "hours_penalty",
     # 일정 단위 (모든 row에 중복)
     "총_체류시간_분", "총_이동시간_분", "총_일정시간_분",
     # 패널티
@@ -75,9 +82,77 @@ OUTPUT_COLS = INPUT_COLS + [
 ]
 
 # ── 9시 출발 고정, 영업시간 검증 폴백 ────────────────────────────────
-DEFAULT_START = "09:00"
+DEFAULT_START = "09:00"   # 첫 장소 도착 시각
 DEFAULT_OPEN  = "09:00"
 DEFAULT_CLOSE = "22:00"
+
+# ── 운영시간 위반 패널티 ─────────────────────────────────────────────
+PENALTY_OFF_DAY        = 15  # CRITICAL: 휴무일 방문
+PENALTY_TIME_WINDOW    = 15  # CRITICAL: 도착시간이 운영시간 밖
+PENALTY_BREAK          =  5  # WARNING:  브레이크 타임에 도착
+PENALTY_LATE_ARRIVAL   =  3  # WARNING:  마감 30분 이내 도착
+PENALTY_EARLY_ARRIVAL  =  2  # INFO:     개장 30분 전 도착 (대기 발생)
+SAFETY_MARGIN_MIN      = 30
+
+
+# ── 요일·시각 헬퍼 ──────────────────────────────────────────────────
+def parse_weekday(date_str: str) -> int | None:
+    """'2025-05-01' → 0(월)~6(일).  파싱 실패 시 None."""
+    if not date_str:
+        return None
+    try:
+        return _date.fromisoformat(date_str.strip()[:10]).weekday()
+    except (ValueError, TypeError):
+        return None
+
+
+def minutes_to_hhmm(m: int) -> str:
+    """분 단위 → 'HH:MM' (음수/24시간 초과는 그대로 표기)."""
+    h, mm = divmod(int(m), 60)
+    return f"{h:02d}:{mm:02d}"
+
+
+def check_hours_violations(
+    spec: HoursSpec,
+    weekday: int | None,
+    arrive_min: int,
+    depart_min: int,
+) -> tuple[list[str], int]:
+    """운영시간 위반 검사 → (위반 목록, 패널티 합계)."""
+    violations: list[str] = []
+    penalty = 0
+
+    # ── 휴무일 ──
+    if weekday is not None and weekday in spec.off_days:
+        day_kr = ["월","화","수","목","금","토","일"][weekday]
+        violations.append(f"off_day({day_kr}휴무)")
+        penalty += PENALTY_OFF_DAY
+
+    # ── 운영시간 윈도우 ──
+    open_m  = to_minutes(spec.open_)
+    close_m = to_minutes(spec.close_)
+    if arrive_min < open_m - SAFETY_MARGIN_MIN:
+        violations.append(f"too_early({minutes_to_hhmm(arrive_min)}<{spec.open_})")
+        penalty += PENALTY_EARLY_ARRIVAL
+    elif arrive_min > close_m:
+        violations.append(f"after_close({minutes_to_hhmm(arrive_min)}>{spec.close_})")
+        penalty += PENALTY_TIME_WINDOW
+    elif depart_min > close_m:
+        violations.append(f"depart_after_close({minutes_to_hhmm(depart_min)}>{spec.close_})")
+        penalty += PENALTY_TIME_WINDOW
+    elif close_m - arrive_min < SAFETY_MARGIN_MIN:
+        violations.append(f"late_arrival({close_m - arrive_min}분 남음)")
+        penalty += PENALTY_LATE_ARRIVAL
+
+    # ── 브레이크 타임 (한식 식당 등) ──
+    if spec.break_start and spec.break_end:
+        bs = to_minutes(spec.break_start)
+        be = to_minutes(spec.break_end)
+        if bs <= arrive_min < be:
+            violations.append(f"break({spec.break_start}-{spec.break_end})")
+            penalty += PENALTY_BREAK
+
+    return violations, penalty
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -142,15 +217,18 @@ class POIMatcher:
 # 2. 일정 단위 처리
 # ────────────────────────────────────────────────────────────────────
 def _to_vrptw_place(row: dict, dwell_min: int) -> VRPTWPlace | None:
-    """매칭된 row → VRPTWPlace 변환. 좌표 없으면 None."""
+    """매칭된 row → VRPTWPlace 변환. 좌표 없으면 None.
+
+    운영시간은 hours_db.resolve_hours() 결과를 사용.
+    """
     if row.get("mapx") is None or row.get("mapy") is None:
         return None
     return VRPTWPlace(
         name=str(row["matched_title"]) if row.get("matched_title") else str(row.get("여행지명", "")),
         lng=float(row["mapx"]),
         lat=float(row["mapy"]),
-        open=DEFAULT_OPEN,
-        close=DEFAULT_CLOSE,
+        open=row.get("open") or DEFAULT_OPEN,
+        close=row.get("close") or DEFAULT_CLOSE,
         stay_duration=dwell_min,
         is_depot=False,
     )
@@ -160,7 +238,7 @@ def process_one_day(
     rows: list[dict],
     matrix,
 ) -> list[dict]:
-    """한 day(같은 plan_id+day)의 row들에 이동시간·패널티 채우기."""
+    """한 day(같은 plan_id+day)의 row들에 이동시간·운영시간 위반·패널티 채우기."""
     # 매칭된 장소 → VRPTWPlace 리스트
     places: list[VRPTWPlace | None] = []
     for r in rows:
@@ -176,6 +254,37 @@ def process_one_day(
         sec = matrix.get_travel_time(places[i], places[i + 1])
         travel_minutes.append(round(sec / 60.0, 1))
     travel_minutes.append(None)   # 마지막 장소는 다음 이동시간 없음
+
+    # ── 도착시간 / 이탈시간 시뮬레이션 ──
+    # 첫 장소 = DEFAULT_START 도착 가정
+    arrive_minutes: list[int] = []
+    depart_minutes: list[int] = []
+    cur = to_minutes(DEFAULT_START)
+    for i, r in enumerate(rows):
+        arrive_minutes.append(cur)
+        dwell = int(r.get("체류시간_분") or 60)
+        depart = cur + dwell
+        depart_minutes.append(depart)
+        # 다음 장소 도착 = 이탈 + 이동시간
+        next_travel = travel_minutes[i] if i < len(travel_minutes) else None
+        cur = depart + int(next_travel) if next_travel is not None else depart
+
+    # ── 운영시간 위반 검사 ──
+    weekday = parse_weekday(rows[0].get("일자", "") if rows else "")
+    hours_total_penalty = 0
+    for i, r in enumerate(rows):
+        spec = resolve_hours(
+            r.get("matched_title") or r.get("여행지명") or "",
+            r.get("카테고리힌트") or "",
+        )
+        violations, pen = check_hours_violations(
+            spec, weekday, arrive_minutes[i], depart_minutes[i],
+        )
+        r["운영시간_위반"] = "; ".join(violations) if violations else ""
+        r["hours_penalty"] = pen
+        r["도착시간"]      = minutes_to_hhmm(arrive_minutes[i])
+        r["이탈시간"]      = minutes_to_hhmm(depart_minutes[i])
+        hours_total_penalty += pen
 
     # 합계
     total_dwell = sum((r.get("체류시간_분") or 0) for r in rows)
@@ -210,7 +319,22 @@ def process_one_day(
         except Exception as e:
             vrptw_warnings.append(f"tr_err:{type(e).__name__}")
 
-    risk_score = max(0, 100 - cluster_pen - travel_ratio_penalty)
+    # ── 운영시간 위반 → vrptw_warnings 합산 ──
+    for r in rows:
+        if r.get("운영시간_위반"):
+            vrptw_warnings.append(f"{r.get('matched_title') or r.get('여행지명')}::{r['운영시간_위반']}")
+
+    # ── 최종 risk_score: 100 − cluster − travel_ratio − hours ─────
+    risk_score = max(0, 100 - cluster_pen - travel_ratio_penalty - hours_total_penalty)
+    # Hard Fail Cap: 운영시간 CRITICAL (off_day / time_window) 발생 시 ≤ 59
+    has_hours_critical = any(
+        ("off_day" in (r.get("운영시간_위반") or "")) or
+        ("after_close" in (r.get("운영시간_위반") or "")) or
+        ("depart_after_close" in (r.get("운영시간_위반") or ""))
+        for r in rows
+    )
+    if has_hours_critical:
+        risk_score = min(risk_score, 59)
 
     # row별로 결과 채우기
     for i, r in enumerate(rows):
@@ -286,6 +410,22 @@ def main():
         )
         r["체류시간_분"] = rec.min_minutes
         r["체류출처"]    = rec.source
+
+        # 운영시간 (hours_db.resolve_hours)
+        spec = resolve_hours(
+            r.get("matched_title") or r["여행지명"],
+            r.get("카테고리힌트") or "",
+        )
+        # sub_category 라벨 역산 (HoursSpec에는 label만 있음)
+        r["sub_category"] = spec.label
+        r["open"]         = spec.open_
+        r["close"]        = spec.close_
+        r["break_start"]  = spec.break_start or ""
+        r["break_end"]    = spec.break_end or ""
+        DAY_KR = ["월","화","수","목","금","토","일"]
+        r["off_days"]     = ",".join(DAY_KR[d] for d in spec.off_days) if spec.off_days else ""
+        wd = parse_weekday(r.get("일자", ""))
+        r["요일"]          = DAY_KR[wd] if wd is not None else ""
 
         rows.append(r)
 
