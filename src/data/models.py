@@ -8,12 +8,58 @@ from typing import Literal
 from pydantic import BaseModel, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
-from src.data.theme_taxonomy import PLACE_TYPES, TRAVEL_STYLES
-
 
 # ---------------------------------------------------------------------------
 # Main application models
 # ---------------------------------------------------------------------------
+
+
+class HardFail(BaseModel):
+    fail_type: Literal[
+        "OPERATING_HOURS_CONFLICT",
+        "TRAVEL_TIME_IMPOSSIBLE",
+        "SCHEDULE_INFEASIBLE",
+    ]
+    message: str
+    evidence: str
+    confidence: Literal["High", "Medium", "Low"]
+    poi_name: str | None = None
+
+
+class Warning(BaseModel):
+    warning_type: Literal[
+        "DENSE_SCHEDULE",
+        "INEFFICIENT_ROUTE",
+        "PHYSICAL_STRAIN",
+        "PURPOSE_MISMATCH",
+        "AREA_REVISIT",
+    ]
+    message: str
+    confidence: str
+
+
+class Scores(BaseModel):
+    efficiency: float
+    feasibility: float
+    purpose_fit: float
+    flow: float
+    area_intensity: float
+
+    @model_validator(mode="after")
+    def validate_ranges(self) -> "Scores":
+        for fname in ("efficiency", "feasibility", "purpose_fit", "flow", "area_intensity"):
+            v = getattr(self, fname)
+            if not 0.0 <= v <= 1.0:
+                raise ValueError(f"{fname} must be in [0.0, 1.0], got {v}")
+        return self
+
+
+class AlternativePOI(BaseModel):
+    name: str
+    distance_km: float
+    category: str
+    lat: float
+    lng: float
 
 
 class POI(BaseModel):
@@ -67,19 +113,7 @@ class POI(BaseModel):
 
 class PlaceInput(BaseModel):
     name: str
-    stay_minutes: int | None = None  # None → pipeline에서 dwell_db 자동 추정
-    visit_order: int | None = None   # None → ItineraryPlan에서 리스트 순서 자동 할당
-
-    @field_validator("stay_minutes")
-    @classmethod
-    def validate_stay(cls, v: int | None) -> int | None:
-        if v is None:
-            return v
-        if v <= 0:
-            raise ValueError("stay_minutes must be > 0")
-        if v > 720:
-            raise ValueError("stay_minutes must be <= 720 (12 hours)")
-        return v
+    visit_order: int | None = None  # None → ItineraryPlan에서 리스트 순서 자동 할당
 
     @field_validator("visit_order")
     @classmethod
@@ -91,38 +125,13 @@ class PlaceInput(BaseModel):
         return v
 
 
-class UserPreferences(BaseModel):
-    """API 입력용 테마 선호.
-
-    pipeline에서 theme_taxonomy.UserPreferences(dataclass)로 변환해 사용.
-    place_types / travel_styles 는 theme_taxonomy에 정의된 값만 허용.
-    """
-    place_types: list[str] = []
-    travel_styles: list[str] = []
-
-    @field_validator("place_types")
-    @classmethod
-    def validate_place_types(cls, v: list[str]) -> list[str]:
-        invalid = [p for p in v if p not in PLACE_TYPES]
-        if invalid:
-            raise ValueError(f"허용되지 않는 장소 유형: {invalid}. 허용값: {PLACE_TYPES}")
-        return v
-
-    @field_validator("travel_styles")
-    @classmethod
-    def validate_travel_styles(cls, v: list[str]) -> list[str]:
-        invalid = [s for s in v if s not in TRAVEL_STYLES]
-        if invalid:
-            raise ValueError(f"허용되지 않는 여행 스타일: {invalid}. 허용값: {TRAVEL_STYLES}")
-        return v
-
-
 class ItineraryPlan(BaseModel):
     places: list[PlaceInput]
-    transport: Literal["transit", "car", "walk"] = "transit"
+    travel_days: int  # 여행 일수 (1 이상)
+    party_size: Literal[1, 2, 3, 4, 5]  # 여행 인원 (5 = 5인 이상)
+    party_type: Literal["혼자", "친구", "연인", "가족", "아기동반", "어르신동반"]
     travel_type: Literal["cultural", "nature", "shopping", "food", "adventure"] | None = None
     date: str  # YYYY-MM-DD
-    user_preferences: UserPreferences | None = None  # None → theme_alignment 스킵
 
     @field_validator("places")
     @classmethod
@@ -131,6 +140,15 @@ class ItineraryPlan(BaseModel):
             raise ValueError("ItineraryPlan must have at least 4 places")
         if len(v) > 8:
             raise ValueError("ItineraryPlan must have at most 8 places")
+        return v
+
+    @field_validator("travel_days")
+    @classmethod
+    def validate_travel_days(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("travel_days must be >= 1")
+        if v > 30:
+            raise ValueError("travel_days must be <= 30")
         return v
 
     @model_validator(mode="after")
@@ -152,9 +170,12 @@ class ItineraryPlan(BaseModel):
 class ValidationResult(BaseModel):
     plan_id: str
     final_score: int
-    hard_fails: list[str]
-    warnings: list[str]
+    hard_fails: list[HardFail]
+    warnings: list[Warning]
+    scores: Scores | None = None
     explanations: list[str] = []
+    rewards: list[str] = []
+    alternatives: dict[str, list[AlternativePOI]] = {}
 
     @field_validator("final_score")
     @classmethod

@@ -1,4 +1,4 @@
-"""카카오 모빌리티 길찾기 API → TimeMatrix 어댑터.
+"""카카오 모빌리티 길찾기 API → TimeMatrix 어댑터 (httpx 기반).
 
 VRPTW 엔진의 TimeMatrix 인터페이스를 구현해 즉시 swap-in 가능:
 
@@ -6,6 +6,8 @@ VRPTW 엔진의 TimeMatrix 인터페이스를 구현해 즉시 swap-in 가능:
     from src.validation.vrptw_engine import VRPTWEngine
 
     matrix = KakaoMobilityMatrix.from_env(cache_path="data/route_cache.json")
+    # 비동기 사전 로드 (FastAPI 라이프스팬 등에서 호출)
+    await matrix.aprefetch_matrix(places)
     engine = VRPTWEngine(matrix=matrix)
     result = engine.validate(plan)
 
@@ -16,20 +18,19 @@ VRPTW 엔진의 TimeMatrix 인터페이스를 구현해 즉시 swap-in 가능:
 3. 일일 한도(429/quota) 자동 감지 → Haversine 폴백
 4. 호출 통계 (hit/miss/api_call/fallback) 추적
 5. 환경변수 KAKAO_MOBILITY_KEY (없으면 KAKAO_REST_API_KEY 폴백)
-
-Kakao Mobility 일일 무료 한도 (참고)
-- 길찾기 (자동차): 보통 1만~10만회/일 (계약에 따라)
-- 한도 초과 시 429 또는 비즈 결제 필요
+6. async aprefetch_matrix: httpx.AsyncClient로 N×N 쌍 비동기 사전 로드
+   (get_travel_time은 동기 유지 — VRPTWEngine/OR-Tools 호환)
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
 from pathlib import Path
 from typing import Any
 
-import requests
+import httpx
 
 from src.data.models import VRPTWPlace
 from src.validation.vrptw_engine import HaversineMatrix, TimeMatrix
@@ -38,7 +39,7 @@ from src.validation.vrptw_engine import HaversineMatrix, TimeMatrix
 KAKAO_DIRECTIONS_URL = "https://apis-navi.kakaomobility.com/v1/directions"
 
 DEFAULT_TIMEOUT_SEC: float = 5.0
-DEFAULT_SLEEP_BETWEEN: float = 0.05   # 초당 ~20회 — Kakao QPS 여유
+DEFAULT_SLEEP_BETWEEN: float = 0.05   # 초당 ~20회
 DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_BACKOFF: float = 2.0
 
@@ -46,10 +47,12 @@ DEFAULT_RETRY_BACKOFF: float = 2.0
 class KakaoMobilityMatrix(TimeMatrix):
     """카카오 모빌리티 길찾기 API 기반 TimeMatrix.
 
-    캐시 키 형식: 'lng1,lat1|lng2,lat2' (소수점 4자리 반올림 = 약 11m 정밀도).
-    is_quota_exhausted=True 가 되면 이후 호출은 모두 Haversine 폴백.
+    캐시 키: 'lng1,lat1|lng2,lat2' (소수점 4자리 = 약 11m 정밀도).
+    is_quota_exhausted=True 가 되면 이후 모든 호출은 Haversine 폴백.
+    cache_path=None 이면 메모리만 사용 (일회성 검증).
 
-    캐시 파일은 None일 시 메모리만 사용 (일회성 검증용).
+    동기 get_travel_time은 캐시 조회 + Haversine 폴백만 수행.
+    실제 API 호출은 비동기 aprefetch_matrix / _acall_kakao를 통해서만 발생.
     """
 
     def __init__(
@@ -59,7 +62,7 @@ class KakaoMobilityMatrix(TimeMatrix):
         timeout_sec: float = DEFAULT_TIMEOUT_SEC,
         sleep_between: float = DEFAULT_SLEEP_BETWEEN,
         max_retries: int = DEFAULT_MAX_RETRIES,
-        save_every: int = 50,            # N개 호출마다 캐시 저장
+        save_every: int = 50,
     ) -> None:
         if not api_key:
             raise ValueError(
@@ -79,9 +82,9 @@ class KakaoMobilityMatrix(TimeMatrix):
         self._stats: dict[str, int] = {
             "cache_hit": 0, "api_success": 0, "api_fail": 0, "fallback": 0,
         }
-        self._dirty_count = 0    # 마지막 저장 이후 새로 추가된 캐시 항목 수
+        self._dirty_count = 0
 
-    # ── 팩토리: 환경변수에서 키 자동 로드 ────────────────────────────
+    # ── 팩토리 ───────────────────────────────────────────────────────────
     @classmethod
     def from_env(
         cls,
@@ -93,7 +96,6 @@ class KakaoMobilityMatrix(TimeMatrix):
         if env_path:
             cls._load_dotenv(Path(env_path))
         else:
-            # 기본: 프로젝트 루트의 .env
             project_root = Path(__file__).resolve().parents[2]
             env_default = project_root / ".env"
             if env_default.exists():
@@ -115,14 +117,12 @@ class KakaoMobilityMatrix(TimeMatrix):
                 k, _, v = line.partition("=")
                 os.environ.setdefault(k.strip(), v.strip())
 
-    # ── TimeMatrix 인터페이스 구현 ────────────────────────────────────
+    # ── TimeMatrix 인터페이스 (동기) ──────────────────────────────────────
     def get_travel_time(self, origin: VRPTWPlace, destination: VRPTWPlace) -> int:
-        """origin → destination 이동시간(초). 실패 시 Haversine 폴백."""
-        # 같은 지점이면 0
+        """캐시 조회 + Haversine 폴백. API 직접 호출 없음."""
         if origin.lat == destination.lat and origin.lng == destination.lng:
             return 0
 
-        # 1. 캐시 조회 (양방향)
         key_fwd = self._make_key(origin, destination)
         key_rev = self._make_key(destination, origin)
         if key_fwd in self._cache:
@@ -132,22 +132,102 @@ class KakaoMobilityMatrix(TimeMatrix):
             self._stats["cache_hit"] += 1
             return self._cache[key_rev]
 
-        # 2. API 호출 (한도 미소진 시)
-        if not self._quota_exhausted:
-            duration = self._call_kakao(origin, destination)
-            if duration is not None:
-                self._cache[key_fwd] = duration
-                self._stats["api_success"] += 1
-                self._maybe_save_cache()
-                return duration
-
-        # 3. Haversine 폴백
         self._stats["fallback"] += 1
         return self._fallback.get_travel_time(origin, destination)
 
-    # ── 내부: API 호출 (재시도 포함) ─────────────────────────────────
-    def _call_kakao(self, origin: VRPTWPlace, destination: VRPTWPlace) -> int | None:
-        """카카오 모빌리티 호출. 성공 시 duration(초). 실패 시 None."""
+    # ── 비동기 사전 로드 ─────────────────────────────────────────────────
+    async def aprefetch_matrix(
+        self,
+        places: list[VRPTWPlace],
+        concurrency: int = 5,
+    ) -> None:
+        """모든 POI 쌍의 이동시간을 비동기로 사전 로드한다.
+
+        VRPTWEngine.validate() 호출 전에 await 해두면 get_travel_time이
+        항상 캐시 히트되어 레이턴시 없이 동작한다.
+        """
+        pairs = [
+            (places[i], places[j])
+            for i in range(len(places))
+            for j in range(len(places))
+            if i != j
+        ]
+
+        sem = asyncio.Semaphore(concurrency)
+
+        async def fetch_one(origin: VRPTWPlace, dest: VRPTWPlace) -> None:
+            async with sem:
+                key_fwd = self._make_key(origin, dest)
+                key_rev = self._make_key(dest, origin)
+                if key_fwd in self._cache or key_rev in self._cache:
+                    return
+                if self._quota_exhausted:
+                    return
+                duration = await self._acall_kakao(origin, dest)
+                if duration is not None:
+                    self._cache[key_fwd] = duration
+                    self._stats["api_success"] += 1
+                    self._maybe_save_cache()
+
+        await asyncio.gather(*[fetch_one(o, d) for o, d in pairs])
+        if self._cache_path and self._dirty_count > 0:
+            self.save_cache()
+
+    # ── 비동기 API 호출 ──────────────────────────────────────────────────
+    async def _acall_kakao(
+        self, origin: VRPTWPlace, destination: VRPTWPlace
+    ) -> int | None:
+        """카카오 모빌리티 비동기 호출 (httpx.AsyncClient)."""
+        headers = {"Authorization": f"KakaoAK {self._api_key}"}
+        params = {
+            "origin":      f"{origin.lng},{origin.lat}",
+            "destination": f"{destination.lng},{destination.lat}",
+        }
+
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            for attempt in range(1, self._max_retries + 1):
+                try:
+                    r = await client.get(
+                        KAKAO_DIRECTIONS_URL, headers=headers, params=params
+                    )
+                    if r.status_code == 200:
+                        return self._parse_duration(r.json())
+                    if r.status_code == 429:
+                        print("  [kakao-mobility] 429 — quota exhausted")
+                        self._quota_exhausted = True
+                        return None
+                    if r.status_code in (401, 403):
+                        raise RuntimeError(f"인증 오류 {r.status_code}")
+                    await asyncio.sleep(DEFAULT_RETRY_BACKOFF ** attempt)
+                except httpx.RequestError as e:
+                    if attempt < self._max_retries:
+                        await asyncio.sleep(DEFAULT_RETRY_BACKOFF ** attempt)
+                    else:
+                        print(f"  [kakao-mobility] 실패: {e}")
+
+        self._stats["api_fail"] += 1
+        return None
+
+    # ── 동기 API 호출 (캐시 워밍업 스크립트용) ──────────────────────────
+    def _call_kakao_sync(
+        self, origin: VRPTWPlace, destination: VRPTWPlace
+    ) -> int | None:
+        """동기 API 호출 + 캐시 저장 + 통계 업데이트 (httpx.Client).
+
+        캐시에 이미 있으면 API 호출 없이 캐시 값 반환.
+        """
+        key_fwd = self._make_key(origin, destination)
+        key_rev = self._make_key(destination, origin)
+        if key_fwd in self._cache:
+            self._stats["cache_hit"] += 1
+            return self._cache[key_fwd]
+        if key_rev in self._cache:
+            self._stats["cache_hit"] += 1
+            return self._cache[key_rev]
+
+        if self._quota_exhausted:
+            return None
+
         headers = {"Authorization": f"KakaoAK {self._api_key}"}
         params = {
             "origin":      f"{origin.lng},{origin.lat}",
@@ -156,55 +236,45 @@ class KakaoMobilityMatrix(TimeMatrix):
 
         for attempt in range(1, self._max_retries + 1):
             try:
-                r = requests.get(
-                    KAKAO_DIRECTIONS_URL,
-                    headers=headers, params=params,
-                    timeout=self._timeout,
-                )
+                with httpx.Client(timeout=self._timeout) as client:
+                    r = client.get(KAKAO_DIRECTIONS_URL, headers=headers, params=params)
                 if r.status_code == 200:
-                    data = r.json()
-                    routes = data.get("routes", [])
-                    if not routes:
-                        return None
-                    sections = routes[0].get("sections", [])
-                    if not sections:
-                        # routes[0]에 result_code 가 들어있을 수 있음
-                        result_msg = routes[0].get("result_msg", "no sections")
-                        # 출발/도착이 같거나 도달 불가 등
-                        if "DIFFERENT" in result_msg.upper() or "NOT" in result_msg.upper():
-                            return None
-                        return None
-                    # 카카오는 routes[0].summary.duration 또는 sections[0].duration 둘 다 제공
-                    summary = routes[0].get("summary", {})
-                    if "duration" in summary:
-                        return int(summary["duration"])
-                    return int(sections[0].get("duration", 0))
-
+                    duration = self._parse_duration(r.json())
+                    if duration is not None:
+                        self._cache[key_fwd] = duration
+                        self._stats["api_success"] += 1
+                        self._maybe_save_cache()
+                    return duration
                 if r.status_code == 429:
-                    print("  [kakao-mobility] 429 Too Many Requests — quota exhausted")
+                    print("  [kakao-mobility] 429 — quota exhausted")
                     self._quota_exhausted = True
                     return None
-
                 if r.status_code in (401, 403):
-                    raise RuntimeError(
-                        f"인증 오류 {r.status_code} — KAKAO_MOBILITY_KEY 확인 필요"
-                    )
-
-                # 5xx 등 일시 오류 → 재시도
-                wait = DEFAULT_RETRY_BACKOFF ** attempt
-                time.sleep(wait)
-
-            except requests.RequestException as e:
-                wait = DEFAULT_RETRY_BACKOFF ** attempt
+                    raise RuntimeError(f"인증 오류 {r.status_code}")
+                time.sleep(DEFAULT_RETRY_BACKOFF ** attempt)
+            except httpx.RequestError as e:
                 if attempt < self._max_retries:
-                    time.sleep(wait)
+                    time.sleep(DEFAULT_RETRY_BACKOFF ** attempt)
                 else:
                     print(f"  [kakao-mobility] 실패: {e}")
 
         self._stats["api_fail"] += 1
         return None
 
-    # ── 캐시 입출력 ──────────────────────────────────────────────────
+    @staticmethod
+    def _parse_duration(data: dict) -> int | None:
+        routes = data.get("routes", [])
+        if not routes:
+            return None
+        sections = routes[0].get("sections", [])
+        summary = routes[0].get("summary", {})
+        if "duration" in summary:
+            return int(summary["duration"])
+        if sections:
+            return int(sections[0].get("duration", 0))
+        return None
+
+    # ── 캐시 입출력 ──────────────────────────────────────────────────────
     def _make_key(self, origin: VRPTWPlace, destination: VRPTWPlace) -> str:
         return (
             f"{origin.lng:.4f},{origin.lat:.4f}"
@@ -216,10 +286,9 @@ class KakaoMobilityMatrix(TimeMatrix):
             return {}
         try:
             data = json.loads(self._cache_path.read_text(encoding="utf-8"))
-            # 정수형 보장
             return {k: int(v) for k, v in data.items() if v is not None}
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"  [warn] 캐시 로드 실패 ({self._cache_path}): {e} — 빈 캐시로 시작")
+            print(f"  [warn] 캐시 로드 실패 ({self._cache_path}): {e}")
             return {}
 
     def _maybe_save_cache(self) -> None:
@@ -228,20 +297,17 @@ class KakaoMobilityMatrix(TimeMatrix):
             self.save_cache()
 
     def save_cache(self) -> None:
-        """현재 캐시를 디스크에 저장."""
         if not self._cache_path:
             return
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(
-            json.dumps(self._cache, ensure_ascii=False),
-            encoding="utf-8",
+            json.dumps(self._cache, ensure_ascii=False), encoding="utf-8"
         )
         self._dirty_count = 0
 
-    # ── 진단·상태 조회 ───────────────────────────────────────────────
+    # ── 진단 ─────────────────────────────────────────────────────────────
     @property
     def stats(self) -> dict[str, int]:
-        """호출 통계: cache_hit / api_success / api_fail / fallback."""
         return dict(self._stats)
 
     @property
