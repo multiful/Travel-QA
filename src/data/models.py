@@ -113,7 +113,8 @@ class POI(BaseModel):
 
 class PlaceInput(BaseModel):
     name: str
-    visit_order: int | None = None  # None → ItineraryPlan에서 리스트 순서 자동 할당
+    visit_order: int | None = None      # None → DayPlan에서 해당 일자 내 리스트 순서 자동 할당
+    is_accommodation: bool = False      # True → 숙소(Depot). M3/M4 백트래킹 계산 시 기준점 역할
 
     @field_validator("visit_order")
     @classmethod

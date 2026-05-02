@@ -29,12 +29,13 @@ def make_poi(
 def make_plan(
     names: list[str],
     travel_type: str | None = None,
+    party_type: str = "친구",
 ) -> ItineraryPlan:
     places = names if names else ["_p0"]
     return ItineraryPlan(
         days=[DayPlan(places=[PlaceInput(name=n) for n in places])],
         party_size=2,
-        party_type="친구",
+        party_type=party_type,
         date="2026-05-10",
         travel_type=travel_type,
     )
@@ -64,22 +65,41 @@ def detector() -> WarningDetector:
 # ---------------------------------------------------------------------------
 
 class TestDenseSchedule:
-    def test_dense_trigger(self, detector):
-        # 4 POIs × 60 min dwell + 3 × 100 min travel = 540 > 480
+    def test_dense_trigger_baby(self, detector):
+        # 아기동반 피로도 한계 8h=480분, 4×60 + 3×100 = 540 > 480 → 발동
         pois = [make_poi(poi_id=str(i), name=f"P{i}", duration_min=60) for i in range(4)]
         matrix = make_matrix({(0, 1): 100.0, (1, 2): 100.0, (2, 3): 100.0})
-        plan = make_plan([f"P{i}" for i in range(4)])
+        plan = make_plan([f"P{i}" for i in range(4)], party_type="아기동반")
+        warns = detector.detect(plan, pois, matrix)
+        types = [w.warning_type for w in warns]
+        assert "DENSE_SCHEDULE" in types
+
+    def test_dense_trigger_friends_heavy(self, detector):
+        # 친구 피로도 한계 12h=720분, 4×120 + 3×120 = 840 > 720 → 발동
+        pois = [make_poi(poi_id=str(i), name=f"P{i}", duration_min=120) for i in range(4)]
+        matrix = make_matrix({(0, 1): 120.0, (1, 2): 120.0, (2, 3): 120.0})
+        plan = make_plan([f"P{i}" for i in range(4)], party_type="친구")
         warns = detector.detect(plan, pois, matrix)
         types = [w.warning_type for w in warns]
         assert "DENSE_SCHEDULE" in types
 
     def test_no_dense_within_threshold(self, detector):
+        # 친구 720분 한계, 4×60 + 3×10 = 270 < 720 → 미발동
         pois = [make_poi(poi_id=str(i), name=f"P{i}", duration_min=60) for i in range(4)]
         matrix = make_matrix({(0, 1): 10.0, (1, 2): 10.0, (2, 3): 10.0})
         plan = make_plan([f"P{i}" for i in range(4)])
         warns = detector.detect(plan, pois, matrix)
         types = [w.warning_type for w in warns]
         assert "DENSE_SCHEDULE" not in types
+
+    def test_dense_message_includes_party_type(self, detector):
+        pois = [make_poi(poi_id=str(i), name=f"P{i}", duration_min=60) for i in range(4)]
+        matrix = make_matrix({(0, 1): 100.0, (1, 2): 100.0, (2, 3): 100.0})
+        plan = make_plan([f"P{i}" for i in range(4)], party_type="어르신동반")
+        warns = detector.detect(plan, pois, matrix)
+        dense = next((w for w in warns if w.warning_type == "DENSE_SCHEDULE"), None)
+        assert dense is not None
+        assert "어르신동반" in dense.message
 
 
 # ---------------------------------------------------------------------------
