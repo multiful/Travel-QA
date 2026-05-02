@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 
 from src.data.models import ItineraryPlan, POI, Warning
+from src.data.party_config import get_party_profile
 
 DEFAULT_START_MINUTES: int = 9 * 60  # 09:00
 
@@ -98,13 +99,13 @@ class WarningDetector:
     """여행 일정의 Soft Warning 조건을 탐지한다.
 
     External I/O 없음. matrix: dict[int, dict[int, dict]] 인덱스 기반.
+    피로도 임계·체력 부담 기준은 party_type별 PartyProfile에서 동적으로 결정된다.
     """
 
-    DENSE_THRESHOLD_MIN: int = 480    # 8시간 초과 시 과밀 경고
-    STRAIN_THRESHOLD_KM: float = 30.0 # 이동 30km 초과 시 체력 부담
-    BACKTRACK_THRESHOLD: float = 0.3  # 30% 초과 이동거리 비효율
+    STRAIN_THRESHOLD_KM: float = 30.0  # 기준 그룹(혼자/친구) 체력 부담 임계
+    BACKTRACK_THRESHOLD: float = 0.3   # 30% 초과 이동거리 비효율
     PURPOSE_FIT_THRESHOLD: float = 0.5
-    CONSECUTIVE_REVISIT: int = 2      # 같은 카테고리 연속 ≥ 2회
+    CONSECUTIVE_REVISIT: int = 2       # 같은 카테고리 연속 ≥ 2회
 
     def detect(
         self,
@@ -114,23 +115,27 @@ class WarningDetector:
     ) -> list[Warning]:
         """Warning 목록 반환. 없으면 빈 리스트."""
         warns: list[Warning] = []
-        warns.extend(self._check_dense_schedule(pois, matrix))
+        warns.extend(self._check_dense_schedule(plan, pois, matrix))
         warns.extend(self._check_inefficient_route(pois))
-        warns.extend(self._check_physical_strain(pois))
+        warns.extend(self._check_physical_strain(plan, pois))
         warns.extend(self._check_purpose_mismatch(plan, pois))
         warns.extend(self._check_area_revisit(pois))
         return warns
 
-    def _check_dense_schedule(self, pois: list[POI], matrix: dict) -> list[Warning]:
+    def _check_dense_schedule(
+        self, plan: ItineraryPlan, pois: list[POI], matrix: dict
+    ) -> list[Warning]:
+        profile = get_party_profile(plan.party_type)
+        threshold_min = profile.fatigue_hours * 60
         total_min = _total_time_min(pois, matrix)
-        if total_min <= self.DENSE_THRESHOLD_MIN:
+        if total_min <= threshold_min:
             return []
         _, confidence = WARNING_TYPES["DENSE_SCHEDULE"]
         return [Warning(
             warning_type="DENSE_SCHEDULE",
             message=(
                 f"총 일정 소요 시간 {total_min:.0f}분 ({total_min / 60:.1f}시간)이 "
-                f"{self.DENSE_THRESHOLD_MIN // 60}시간을 초과합니다. 일정이 너무 빽빽합니다."
+                f"'{plan.party_type}' 그룹 피로도 한계 {profile.fatigue_hours}시간을 초과합니다."
             ),
             confidence=confidence,
         )]
@@ -155,16 +160,19 @@ class WarningDetector:
             confidence=confidence,
         )]
 
-    def _check_physical_strain(self, pois: list[POI]) -> list[Warning]:
+    def _check_physical_strain(self, plan: ItineraryPlan, pois: list[POI]) -> list[Warning]:
+        profile = get_party_profile(plan.party_type)
+        # speed_factor < 1.0 → 취약 그룹일수록 더 낮은 거리에서 경고
+        threshold_km = self.STRAIN_THRESHOLD_KM * profile.speed_factor
         total_km = _total_km(pois)
-        if total_km <= self.STRAIN_THRESHOLD_KM:
+        if total_km <= threshold_km:
             return []
         _, confidence = WARNING_TYPES["PHYSICAL_STRAIN"]
         return [Warning(
             warning_type="PHYSICAL_STRAIN",
             message=(
                 f"총 이동 거리 {total_km:.1f}km가 "
-                f"{self.STRAIN_THRESHOLD_KM:.0f}km를 초과합니다. 체력 부담이 우려됩니다."
+                f"'{plan.party_type}' 그룹 체력 한계 {threshold_km:.0f}km를 초과합니다."
             ),
             confidence=confidence,
         )]
