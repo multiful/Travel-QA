@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.data.models import POI, ItineraryPlan, PlaceInput
+from src.data.models import DayPlan, ItineraryPlan, PlaceInput, POI
 from src.validation.hard_fail import DEFAULT_START_MINUTES, HardFailDetector
 
 
@@ -28,22 +28,10 @@ def make_poi(
     )
 
 
-_DUMMY_PLAN = ItineraryPlan(
-    places=[PlaceInput(name=f"P{i}") for i in range(4)],
-    travel_days=1,
-    party_size=2,
-    party_type="친구",
-    date="2026-05-10",
-)
-
-
 def make_plan(names: list[str]) -> ItineraryPlan:
-    """ItineraryPlan은 최소 4개 장소 필요 → 4개 미만은 dummy plan 사용."""
-    if len(names) < 4:
-        return _DUMMY_PLAN
+    places = names if names else ["P0"]
     return ItineraryPlan(
-        places=[PlaceInput(name=n) for n in names],
-        travel_days=1,
+        days=[DayPlan(places=[PlaceInput(name=n) for n in places])],
         party_size=2,
         party_type="친구",
         date="2026-05-10",

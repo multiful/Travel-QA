@@ -1,4 +1,4 @@
-<!-- updated: 2026-04-30 | hash: bf153a9c | summary: cluster_dispersion M1-M4 완성, M4 DBSCAN per-request 구현 + M3 중복 방지 명시 -->
+<!-- updated: 2026-05-02 | hash: bf153a9c | summary: 입력 스키마 확정 — 다일 일정(DayPlan), 인원·동행 유형, 체류시간 자동 추정 반영 -->
 
 1. 프로젝트 비전
   "우리는 여행을 추천하지 않는다. 그 일정이 실패할지, 성공할지를 증명한다."
@@ -6,15 +6,22 @@
   데이터와 규칙 기반으로 검증하고, AI(LLM)를 통해 설명 가능한(Explainable) 피드백을 제공하는
   QA 레이어 시스템입니다.
 
+  [확정 입력 스키마]
+  필수: days (일별 장소 목록, 일별 1~8개) · party_size (1/2/3/4/5인 이상) ·
+        party_type (혼자/친구/연인/가족/아기동반/어르신동반) · date (YYYY-MM-DD 시작일)
+  선택: visit_order (미입력 시 리스트 순서 자동) · travel_type (cultural/nature/shopping/food/adventure)
+  제외: 체류시간(dwell_db 자동 추정) · 이동수단(Kakao Mobility 자동 조회)
+
 2. 핵심 기능 및 구현 전략
 
-  ① 일정 검증 (Validation)
+  ① 일정 검증 (Validation) — 일자별(per-day) 수행
    - Hard Fail (Critical): 운영시간 충돌, 이동 불가 등 물리적으로 실행 불가능한 요소 탐지.
    - Soft Warning: 동선 비효율(Backtracking), 일정 과밀, 체력 부담 등 품질 저하 요소 탐지.
    - 구현 방식:
        - HardFailDetector: 운영시간 및 이동 시간 윈도우 기반 제약 조건 검사.
-         체류시간 비현실성(dwell_db 권장 최소의 50% 미만 입력) 포함.
+         체류시간은 dwell_db가 자동 추정 (사용자 입력 없음).
        - WarningDetector: 동선 흐름(Flow) 및 지역 밀도(Area Intensity) 분석.
+         인원·동행 유형(party_size, party_type)을 향후 경고 가중치에 활용 예정.
 
   ② 점수 산정 (Scoring)
    - 4개 지표(travel_ratio, cluster_dispersion, theme_alignment, Congestion Coefficient)로 패널티 구조의 Risk Score 산출.

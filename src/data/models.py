@@ -125,45 +125,55 @@ class PlaceInput(BaseModel):
         return v
 
 
-class ItineraryPlan(BaseModel):
+class DayPlan(BaseModel):
+    """하루 일정 — 장소 이름과 방문 순서 입력."""
     places: list[PlaceInput]
-    travel_days: int  # 여행 일수 (1 이상)
-    party_size: Literal[1, 2, 3, 4, 5]  # 여행 인원 (5 = 5인 이상)
-    party_type: Literal["혼자", "친구", "연인", "가족", "아기동반", "어르신동반"]
-    travel_type: Literal["cultural", "nature", "shopping", "food", "adventure"] | None = None
-    date: str  # YYYY-MM-DD
 
     @field_validator("places")
     @classmethod
     def validate_place_count(cls, v: list[PlaceInput]) -> list[PlaceInput]:
-        if len(v) < 4:
-            raise ValueError("ItineraryPlan must have at least 4 places")
+        if len(v) < 1:
+            raise ValueError("DayPlan must have at least 1 place")
         if len(v) > 8:
-            raise ValueError("ItineraryPlan must have at most 8 places")
-        return v
-
-    @field_validator("travel_days")
-    @classmethod
-    def validate_travel_days(cls, v: int) -> int:
-        if v < 1:
-            raise ValueError("travel_days must be >= 1")
-        if v > 30:
-            raise ValueError("travel_days must be <= 30")
+            raise ValueError("DayPlan must have at most 8 places")
         return v
 
     @model_validator(mode="after")
-    def auto_fill_visit_order(self) -> "ItineraryPlan":
-        """visit_order 미입력 시 리스트 위치(1-based)로 자동 할당."""
+    def auto_fill_visit_order(self) -> "DayPlan":
+        """visit_order 미입력 시 해당 일자 내 리스트 위치(1-based)로 자동 할당."""
         for i, place in enumerate(self.places):
             if place.visit_order is None:
                 place.visit_order = i + 1
         return self
 
+
+class ItineraryPlan(BaseModel):
+    days: list[DayPlan]   # 일자별 장소 목록 (len = travel_days)
+    party_size: Literal[1, 2, 3, 4, 5]   # 여행 인원 (5 = 5인 이상)
+    party_type: Literal["혼자", "친구", "연인", "가족", "아기동반", "어르신동반"]
+    travel_type: Literal["cultural", "nature", "shopping", "food", "adventure"] | None = None
+    date: str  # 여행 시작일 (YYYY-MM-DD)
+
+    @field_validator("days")
+    @classmethod
+    def validate_days(cls, v: list[DayPlan]) -> list[DayPlan]:
+        if len(v) < 1:
+            raise ValueError("ItineraryPlan must have at least 1 day")
+        if len(v) > 30:
+            raise ValueError("ItineraryPlan must have at most 30 days")
+        return v
+
+    @computed_field
+    def travel_days(self) -> int:
+        return len(self.days)
+
     @computed_field
     def plan_id(self) -> str:
-        key = "_".join(
-            p.name for p in sorted(self.places, key=lambda x: x.visit_order or 0)
-        ) + self.date
+        parts: list[str] = []
+        for d_idx, day in enumerate(self.days):
+            for p in sorted(day.places, key=lambda x: x.visit_order or 0):
+                parts.append(f"d{d_idx}:{p.name}")
+        key = "_".join(parts) + self.date
         return hashlib.sha256(key.encode()).hexdigest()[:12]
 
 

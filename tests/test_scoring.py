@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.data.models import HardFail, ItineraryPlan, POI, PlaceInput, Scores
+from src.data.models import DayPlan, HardFail, ItineraryPlan, PlaceInput, POI, Scores
 from src.validation.scoring import WEIGHTS, ScoreCalculator
 
 
@@ -31,8 +31,7 @@ def make_plan(
     travel_type: str | None = None,
 ) -> ItineraryPlan:
     return ItineraryPlan(
-        places=[PlaceInput(name=n) for n in names],
-        travel_days=1,
+        days=[DayPlan(places=[PlaceInput(name=n) for n in names])],
         party_size=2,
         party_type="친구",
         date="2026-05-10",

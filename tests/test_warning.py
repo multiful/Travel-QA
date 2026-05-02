@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.data.models import POI, ItineraryPlan, PlaceInput
+from src.data.models import DayPlan, ItineraryPlan, PlaceInput, POI
 from src.validation.warning import WarningDetector
 
 
@@ -30,11 +30,9 @@ def make_plan(
     names: list[str],
     travel_type: str | None = None,
 ) -> ItineraryPlan:
-    """ItineraryPlan은 최소 4개 장소 필요 → 4개 미만은 패딩 추가."""
-    padded = names + [f"_dummy{i}" for i in range(max(0, 4 - len(names)))]
+    places = names if names else ["_p0"]
     return ItineraryPlan(
-        places=[PlaceInput(name=n) for n in padded],
-        travel_days=1,
+        days=[DayPlan(places=[PlaceInput(name=n) for n in places])],
         party_size=2,
         party_type="친구",
         date="2026-05-10",
