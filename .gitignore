@@ -13,9 +13,14 @@ build/
 .ruff_cache/
 .mypy_cache/
 
-# 환경 변수
+# 환경 변수 — 모든 변형 차단 (key·secret 노출 방지)
 .env
-.env.local
+.env.*
+*.env
+*.env.backup
+.env.backup
+*.backup
+!.env.example
 
 # 데이터베이스
 chroma_db/
@@ -37,5 +42,19 @@ Thumbs.db
 
 # Harness 실행 출력
 phases/**/step*-output.json
-gun/
 .Rhistory
+
+# Node — 절대 추적 X
+node_modules/
+package-lock.json
+
+# 임시 / 작업 폴더 (키 노출 방지)
+api_code/
+
+# gun/ — 코드·문서·산출물은 push, raw 데이터/임시 파일만 제외
+gun/data/pois.csv
+gun/data/pois_processed.csv
+gun/data/_checkpoint.json
+gun/data/_qa/
+gun/data/~$*
+gun/data/*.tmp
