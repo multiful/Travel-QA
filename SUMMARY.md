@@ -1,4 +1,4 @@
-<!-- updated: 2026-05-02 | hash: bf153a9c | summary: 입력 스키마 확정 — 다일 일정(DayPlan), 인원·동행 유형, 체류시간 자동 추정 반영 -->
+<!-- updated: 2026-05-03 | hash: 3c95e357 | summary: 입력 스키마 확정 — DayPlan·인원·동행 유형·체류시간 자동 추정·웰니스/무장애 가산점 엔진 반영 -->
 
 1. 프로젝트 비전
   "우리는 여행을 추천하지 않는다. 그 일정이 실패할지, 성공할지를 증명한다."
@@ -51,6 +51,16 @@
            - 서울 소재 POI는 서울 도시데이터 API(실시간 인구 + 12시간 예측)를 우선 적용, 미커버 POI는 한국문화관광연구원 2020~2024 PDF 통계로 폴백.
          - LLM 연동: "해당 월은 통계적으로 전년 대비 방문객이 30% 증가하는 기간입니다. 이에 따라 보수적인 이동 시간을 제안합니다"라는 근거를 생성합니다.
 
+       - BonusEngine : 웰니스·무장애 방문 가산점 계산 (`src/scoring/bonus_engine.py`).
+         - 한국관광공사 웰니스 API(B551011/WellnessTursmService) 및 무장애 API(B551011/KorWithService2) 데이터를
+           scripts/build_poi_dataset.py 로 사전 수집해 data/wellness_places.json · data/barrier_free_places.json 로 보관.
+           런타임에 외부 I/O 없이 좌표 매칭(Haversine, 반경 0.3km)으로 판정.
+         - 웰니스 장소 방문: +3점/장소, 모든 party_type 적용.
+         - 무장애 장소 방문: +5점/장소, 아기동반·어르신동반·가족에만 적용 (해당 그룹의 실질적 필요 반영).
+         - 총 가산점 상한(BONUS_CAP): +20점.
+         - 최종 점수 공식: adjusted = base_score − (cluster + travel_ratio + theme 패널티) + bonus
+           → clamp(0, 100), Hard Fail 존재 시 ≤ 59.
+
   ③ 설명 엔진 (Explain Engine)
    - 모든 판정 결과를 [사실(Fact) → 규칙(Rule) → 위험(Risk) → 제안(Suggestion)] 4단계 구조로 출력.
    - 구현 방식: Claude API를 활용하여 정형화된 검증 데이터(JSON)를 자연어 보고서로 변환.
@@ -62,6 +72,8 @@
 
   ① 외부 API 데이터
    - TourAPI (한국관광공사): POI 기본 메타데이터(운영시간, 카테고리, 좌표) 수집.
+   - 한국관광공사 웰니스 관광 정보 API (B551011/WellnessTursmService): 전국 웰니스 관광지 좌표 수집 → data/wellness_places.json 사전 빌드.
+   - 한국관광공사 무장애 여행 정보 API (B551011/KorWithService2): 휠체어·유모차·엘리베이터·안내견 동반 가능 여부 등 접근성 메타데이터 수집 → data/barrier_free_places.json 사전 빌드.
    - Kakao Local/Mobility: 좌표 정규화 및 실제 이동 시간/거리 행렬(Distance Matrix) 생성.
    - 데이터 신뢰도 3단계:
        High   — Kakao 실시간 API 성공 + TourAPI 운영시간 정상 제공
