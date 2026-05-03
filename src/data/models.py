@@ -33,6 +33,7 @@ class Warning(BaseModel):
         "PHYSICAL_STRAIN",
         "PURPOSE_MISMATCH",
         "AREA_REVISIT",
+        "CUMULATIVE_FATIGUE",
     ]
     message: str
     confidence: str
@@ -189,6 +190,7 @@ class ValidationResult(BaseModel):
     alternatives: dict[str, list[AlternativePOI]] = {}
     penalty_breakdown: dict[str, int] = Field(default_factory=dict)
     bonus_breakdown: dict[str, int] = Field(default_factory=dict)
+    repair: dict = Field(default_factory=dict)
 
     @field_validator("final_score")
     @classmethod

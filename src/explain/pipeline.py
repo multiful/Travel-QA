@@ -34,6 +34,7 @@ from src.scoring.cluster_dispersion import evaluate_cluster_dispersion
 from src.scoring.reward_engine import generate_rewards
 from src.scoring.theme_alignment import POIWithCategory, ThemeAlignmentJudge
 from src.scoring.travel_ratio import evaluate_travel_ratio
+from src.explain.repair import RepairEngine
 from src.validation.hard_fail import HardFailDetector
 from src.validation.scoring import ScoreCalculator
 from src.validation.warning import WarningDetector
@@ -82,6 +83,7 @@ class ValidatorPipeline:
         self._hard_fail = HardFailDetector()
         self._warning = WarningDetector()
         self._scorer = ScoreCalculator()
+        self._repair = RepairEngine()
         self._bonus = bonus_engine or BonusEngine.from_dataset(
             _DEFAULT_WELLNESS_PATH, _DEFAULT_BARRIER_FREE_PATH
         )
@@ -123,8 +125,23 @@ class ValidatorPipeline:
             accom_pois = [p for p in day_pois if p.category == "32"]
             prev_last_accom = accom_pois[-1] if accom_pois else None
 
-        # ── 2. Warning 탐지 (전체 POI) ──────────────────────────────────
-        warnings = self._warning.detect(plan=plan, pois=all_pois, matrix=matrix)
+        # ── 2. Warning 탐지 (per-day) ────────────────────────────────────
+        # PURPOSE_MISMATCH는 여행 전체 테마 판단 → all_pois로 1회만 호출
+        # 나머지(DENSE_SCHEDULE, PHYSICAL_STRAIN, INEFFICIENT_ROUTE, AREA_REVISIT)는
+        # 일자별로 개별 호출해 threshold를 하루 기준에 맞게 적용
+        warnings: list = []
+        for day_pois in per_day_pois:
+            if not day_pois:
+                continue
+            day_warns = self._warning.detect(plan=plan, pois=day_pois, matrix=matrix)
+            warnings.extend(w for w in day_warns if w.warning_type != "PURPOSE_MISMATCH")
+
+        warnings.extend(self._warning._check_purpose_mismatch(plan, all_pois))
+
+        # CUMULATIVE_FATIGUE — cross-day 분석 (2일 이상 일정에서만 의미 있음)
+        warnings.extend(
+            self._warning.check_cumulative_fatigue(plan, per_day_pois, matrix)
+        )
 
         # ── 3. ScoreCalculator → base_score ────────────────────────────
         if all_pois:
@@ -199,6 +216,18 @@ class ValidatorPipeline:
         if bonus_result.accessibility_bonus:
             bonus_breakdown["accessibility"] = bonus_result.accessibility_bonus
 
+        # ── 10. Repair Engine (Hard Fail 발생 시만 실행) ─────────────────
+        repair_data: dict = {}
+        if hard_fails:
+            repair_result = self._repair.repair(
+                plan=plan,
+                per_day_pois=per_day_pois,
+                matrix=matrix,
+                hard_fails=hard_fails,
+            )
+            if not repair_result.is_empty:
+                repair_data = repair_result.to_dict()
+
         return ValidationResult(
             plan_id=plan.plan_id,
             final_score=adjusted,
@@ -208,4 +237,5 @@ class ValidatorPipeline:
             rewards=rewards,
             penalty_breakdown=penalty_breakdown,
             bonus_breakdown=bonus_breakdown,
+            repair=repair_data,
         )

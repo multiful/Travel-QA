@@ -13,6 +13,7 @@ WARNING_TYPES = {
     "PHYSICAL_STRAIN":   ("체력 부담",     "Medium"),
     "PURPOSE_MISMATCH":  ("목적 부적합",   "Medium-Low"),
     "AREA_REVISIT":      ("구역 재방문",   "Medium"),
+    "CUMULATIVE_FATIGUE": ("누적 피로도",  "Medium"),
 }
 
 INTENT_VECTORS: dict[str, dict[str, float]] = {
@@ -45,7 +46,7 @@ class WarningDetector:
     STRAIN_THRESHOLD_KM: float = 30.0  # 기준 그룹(혼자/친구) 체력 부담 임계
     BACKTRACK_THRESHOLD: float = 0.3   # 30% 초과 이동거리 비효율
     PURPOSE_FIT_THRESHOLD: float = 0.5
-    CONSECUTIVE_REVISIT: int = 2       # 같은 카테고리 연속 ≥ 2회
+    CONSECUTIVE_REVISIT: int = 3       # 같은 카테고리 연속 ≥ 3회 (2회는 문화투어 등에서 false positive)
 
     def detect(
         self,
@@ -165,6 +166,68 @@ class WarningDetector:
             ),
             confidence=confidence,
         )]
+
+    def check_cumulative_fatigue(
+        self,
+        plan: ItineraryPlan,
+        per_day_pois: list[list[POI]],
+        matrix: dict,
+    ) -> list[Warning]:
+        """Multi-day 누적 피로도 분석 — 단일 detect() 호출로는 포착할 수 없는 cross-day 패턴."""
+        if len(per_day_pois) < 2:
+            return []
+
+        profile = get_party_profile(plan.party_type)
+        daily_limit = float(profile.fatigue_hours * 60)
+
+        intensities: list[float] = []
+        for day_pois in per_day_pois:
+            if not day_pois:
+                intensities.append(0.0)
+                continue
+            dist_cache = build_dist_cache(day_pois)
+            dwell = sum(p.duration_min for p in day_pois)
+            travel = sum(
+                get_travel_min(matrix, i - 1, i, day_pois[i - 1], day_pois[i], dist_cache)
+                for i in range(1, len(day_pois))
+            )
+            intensities.append((dwell + travel) / daily_limit)
+
+        # 3일 이상 연속 고강도(>75%) → 학대 일정
+        HIGH = 0.75
+        ABUSE_RUN = 3
+        run = max_run = 0
+        for v in intensities:
+            run = run + 1 if v > HIGH else 0
+            max_run = max(max_run, run)
+
+        if max_run >= ABUSE_RUN:
+            return [Warning(
+                warning_type="CUMULATIVE_FATIGUE",
+                message=(
+                    f"{max_run}일 연속으로 일일 피로도 한계의 {int(HIGH*100)}% 이상인 일정이 감지되었습니다. "
+                    f"'{plan.party_type}' 그룹에게 심각한 누적 피로가 예상됩니다. "
+                    "중간에 여유 있는 반나절 일정을 넣어보세요."
+                ),
+                confidence="Medium",
+            )]
+
+        # 전날 매우 강도 높음(>85%) + 다음날도 상당(>60%) → carry-over 경고
+        VERY_HIGH = 0.85
+        MODERATE = 0.60
+        for i in range(1, len(intensities)):
+            if intensities[i - 1] > VERY_HIGH and intensities[i] > MODERATE:
+                return [Warning(
+                    warning_type="CUMULATIVE_FATIGUE",
+                    message=(
+                        f"{i}일차 일정이 피로도 한계의 {intensities[i-1]:.0%}로 매우 고강도였고, "
+                        f"{i+1}일차도 {intensities[i]:.0%} 강도로 계획되어 있습니다. "
+                        "전날 피로가 이월되어 컨디션이 저하될 수 있습니다."
+                    ),
+                    confidence="Medium",
+                )]
+
+        return []
 
     def _check_area_revisit(self, pois: list[POI]) -> list[Warning]:
         if len(pois) < self.CONSECUTIVE_REVISIT:

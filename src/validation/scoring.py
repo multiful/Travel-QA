@@ -93,7 +93,8 @@ class ScoreCalculator:
         hard = 0.0 if hard_fails else 1.0
 
         profile = get_party_profile(plan.party_type)
-        threshold = float(profile.fatigue_hours * 60)
+        num_days = len(plan.days)
+        threshold = float(profile.fatigue_hours * 60) * num_days
 
         total_dwell = sum(p.duration_min for p in pois)
         total_travel_min = sum(
